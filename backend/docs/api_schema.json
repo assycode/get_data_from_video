@@ -1,0 +1,138 @@
+{
+  "_meta": {
+    "name": "bilibili-guanxing",
+    "description": "B站观星API - UP主视频数据抓取接口集",
+    "version": "1.0.0",
+    "base_url": "http://api-guanxing.changwankeji.com/api",
+    "auth": {
+      "type": "query_param",
+      "param_name": "auth_key",
+      "description": "从.env读取的API认证密钥"
+    }
+  },
+  "tools": [
+    {
+      "name": "get_up_info",
+      "description": "获取UP主基本信息，包括昵称、性别、头像、签名等。适用场景：验证UP主身份、获取UP主名称。",
+      "endpoint": "/bl-accinfo",
+      "method": "GET",
+      "parameters": [
+        {
+          "name": "upper_mid",
+          "type": "integer",
+          "required": true,
+          "description": "UP主ID（mid），可从B站主页链接 https://space.bilibili.com/{upper_mid} 中提取"
+        }
+      ],
+      "returns": {
+        "description": "UP主基本信息对象",
+        "fields": [
+          {"name": "mid", "type": "int", "description": "UP主ID"},
+          {"name": "name", "type": "string", "description": "用户昵称"},
+          {"name": "sex", "type": "string", "description": "性别"},
+          {"name": "face", "type": "string", "description": "头像URL"},
+          {"name": "sign", "type": "string", "description": "个性签名"},
+          {"name": "level", "type": "int", "description": "用户等级"}
+        ]
+      }
+    },
+    {
+      "name": "get_up_follower",
+      "description": "获取UP主粉丝数据。适用场景：获取UP主当前粉丝数。",
+      "endpoint": "/bl-accstat",
+      "method": "GET",
+      "parameters": [
+        {
+          "name": "upper_mid",
+          "type": "integer",
+          "required": true,
+          "description": "UP主ID（mid）"
+        }
+      ],
+      "returns": {
+        "description": "粉丝数据对象",
+        "fields": [
+          {"name": "mid", "type": "int", "description": "UP主ID"},
+          {"name": "follower", "type": "int", "description": "粉丝数"},
+          {"name": "following", "type": "int", "description": "关注数"}
+        ]
+      }
+    },
+    {
+      "name": "get_video_list",
+      "description": "获取UP主的视频列表（分页）。适用场景：获取UP主发布的所有视频的基础信息。返回包含bvid、标题、播放量、评论数、发布时间等。需要分页调用（pn从1开始），每页约50条，直到返回为空。",
+      "endpoint": "/bl-arclist",
+      "method": "GET",
+      "parameters": [
+        {
+          "name": "upper_mid",
+          "type": "integer",
+          "required": true,
+          "description": "UP主ID（mid）"
+        },
+        {
+          "name": "pn",
+          "type": "integer",
+          "required": true,
+          "description": "页码，从1开始递增"
+        }
+      ],
+      "returns": {
+        "description": "视频列表分页数据",
+        "fields": [
+          {"name": "vlist", "type": "array", "description": "视频列表，每项包含bvid/aid/title/play/comment/created(时间戳)等"},
+          {"name": "page", "type": "object", "description": "分页信息，包含pn/ps/count"}
+        ]
+      }
+    },
+    {
+      "name": "get_video_data",
+      "description": "获取单个视频的详细数据（不含标签）。适用场景：获取视频的播放、点赞、投币、收藏、分享等统计数据。",
+      "endpoint": "/bl-view",
+      "method": "GET",
+      "parameters": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "视频ID，bvid或aid均可，如 BV1iq4y1o7BS"
+        }
+      ],
+      "returns": {
+        "description": "视频详细数据对象",
+        "fields": [
+          {"name": "bvid", "type": "string", "description": "视频BV号"},
+          {"name": "aid", "type": "int", "description": "视频AID"},
+          {"name": "title", "type": "string", "description": "标题"},
+          {"name": "pubdate", "type": "int", "description": "发布时间（Unix时间戳）"},
+          {"name": "duration", "type": "int", "description": "时长（秒）"},
+          {"name": "stat", "type": "object", "description": "统计数据，包含view/danmaku/reply/favorite/coin/share/like"},
+          {"name": "owner", "type": "object", "description": "作者信息"}
+        ]
+      }
+    },
+    {
+      "name": "get_video_detail",
+      "description": "获取视频完整数据（含标签）。适用场景：需要获取视频的标签(Tags)和分词(participle)信息时调用，例如判断视频是否带有某个话题标签。这是唯一返回标签数据的接口。",
+      "endpoint": "/bl-detail",
+      "method": "GET",
+      "parameters": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "视频ID，bvid或aid均可，如 BV1iq4y1o7BS"
+        }
+      ],
+      "returns": {
+        "description": "视频完整数据对象，包含View和Tags",
+        "fields": [
+          {"name": "View", "type": "object", "description": "视频基础信息（同bl-view）"},
+          {"name": "Tags", "type": "array", "description": "标签列表，每项包含tag_name"},
+          {"name": "participle", "type": "array", "description": "分词/话题标签列表，字符串数组"},
+          {"name": "Card", "type": "object", "description": "UP主卡片信息"}
+        ]
+      }
+    }
+  ]
+}
