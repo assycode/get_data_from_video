@@ -20,7 +20,9 @@ import sys
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from agent.router import router as agent_router
 from config import settings
@@ -78,10 +80,19 @@ def create_app() -> FastAPI:
     # 注册路由
     app.include_router(agent_router)
 
+    # 422 详细日志处理器
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request, exc: RequestValidationError):
+        logger = logging.getLogger("main")
+        logger.error(f"[Main] 422 验证失败: {exc.errors()}")
+        return JSONResponse(
+            status_code=422,
+            content={"code": -1, "message": "请求参数验证失败", "detail": exc.errors()},
+        )
+
     # 全局异常兜底
     @app.exception_handler(Exception)
     async def universal_exception_handler(request, exc):
-        from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=500,
             content={

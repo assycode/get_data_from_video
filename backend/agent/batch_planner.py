@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator
+from typing import Any
 
 from openai import AsyncOpenAI
 
@@ -25,6 +25,123 @@ from api.data_apis import get_video_list, get_video_detail
 from models.schemas import ToolCall
 
 logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------------------------
+# 任务状态缓存与取消控制（解决刷新恢复 + 取消停止问题）
+# ------------------------------------------------------------------------------
+
+# 任务进度缓存：task_id -> dict
+task_cache: dict[str, dict[str, Any]] = {}
+
+# 任务取消信号：task_id -> asyncio.Event
+task_cancel_events: dict[str, asyncio.Event] = {}
+
+# 每个 task_id 的更新锁，防止并发任务互相污染
+task_locks: dict[str, asyncio.Lock] = {}
+
+# 缓存上限与自动清理参数
+MAX_CACHE_TASKS = 100          # 最大同时保留的任务快照数
+CACHE_TTL_SECONDS = 300        # 任务结束后保留 5 分钟，供前端刷新恢复
+
+
+def get_task_status(task_id: str) -> dict[str, Any] | None:
+    """获取指定任务的当前状态快照。"""
+    return task_cache.get(task_id)
+
+
+def _get_task_lock(task_id: str) -> asyncio.Lock:
+    """获取指定任务的更新锁（每个 task_id 独立）。"""
+    if task_id not in task_locks:
+        task_locks[task_id] = asyncio.Lock()
+    return task_locks[task_id]
+
+
+def _enforce_cache_limit() -> None:
+    """当缓存超过上限时，删除最旧的已完成/已取消任务，防止内存无限增长。"""
+    if len(task_cache) <= MAX_CACHE_TASKS:
+        return
+    # 只删除已结束的任务，优先删除 started_at 最旧的
+    finished = [
+        (tid, info.get("started_at", ""))
+        for tid, info in task_cache.items()
+        if info.get("status") in ("completed", "cancelled", "error")
+    ]
+    finished.sort(key=lambda x: x[1])
+    to_remove = len(task_cache) - MAX_CACHE_TASKS
+    for tid, _ in finished[:to_remove]:
+        task_cache.pop(tid, None)
+        task_locks.pop(tid, None)
+        logger.info(f"[CacheLimit] 缓存超限，自动移除旧任务 {tid}")
+
+
+async def _update_task_cache(task_id: str, **kwargs) -> None:
+    """更新任务缓存，只覆盖传入的字段（带锁保护，防止并发写入同一 task_id）。"""
+    async with _get_task_lock(task_id):
+        if task_id not in task_cache:
+            task_cache[task_id] = {
+                "status": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "completed": 0,
+                "total": 0,
+                "matched_so_far": 0,
+                "videos": [],
+            }
+        task_cache[task_id].update(kwargs)
+        # 每次写入后检查是否需要清理旧缓存
+        _enforce_cache_limit()
+
+
+def _cleanup_cancel_event(task_id: str) -> None:
+    """立即清理任务的取消信号（任务结束后立刻执行，避免泄漏）。"""
+    task_cancel_events.pop(task_id, None)
+
+
+def _schedule_task_cleanup(task_id: str, delay: int = CACHE_TTL_SECONDS) -> None:
+    """延迟清理任务缓存，给前端刷新恢复留时间窗口。"""
+    async def _cleanup() -> None:
+        await asyncio.sleep(delay)
+        async with _get_task_lock(task_id):
+            if task_id in task_cache:
+                task_cache.pop(task_id, None)
+                logger.info(f"[Cleanup] 任务 {task_id} 缓存已清理（TTL 到期）")
+            task_locks.pop(task_id, None)
+            task_cancel_events.pop(task_id, None)
+    # 使用 create_task 启动后台清理协程，不阻塞当前流程
+    asyncio.create_task(_cleanup())
+
+
+def cancel_task(task_id: str) -> bool:
+    """标记指定任务为取消状态。返回是否成功找到该任务。"""
+    if task_id in task_cancel_events:
+        task_cancel_events[task_id].set()
+        # cancel_task 在 async endpoint 中被同步调用，事件循环一定在运行
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon(asyncio.create_task, _update_task_cache(task_id, status="cancelled"))
+        except RuntimeError:
+            # 兜底：如果连 running_loop 都没有，直接同步改缓存
+            if task_id in task_cache:
+                task_cache[task_id]["status"] = "cancelled"
+        logger.info(f"[Task] 任务 {task_id} 已标记取消")
+        return True
+    return False
+
+
+# ------------------------------------------------------------------------------
+# 取消监听器（后台任务模式下，一旦收到取消信号立即终止所有子任务）
+# ------------------------------------------------------------------------------
+
+async def _watch_cancel(task_id: str, cancel_event: asyncio.Event, tasks: list[asyncio.Task]) -> None:
+    """监听取消信号，一旦被设置立即取消所有子任务。"""
+    try:
+        await cancel_event.wait()
+        logger.info(f"[CancelWatcher][{task_id}] 检测到取消信号，开始清理 {len([t for t in tasks if not t.done()])} 个未完成的子任务")
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+    except asyncio.CancelledError:
+        # 正常：run_batch_task 结束后会取消 watcher
+        pass
 
 
 # ------------------------------------------------------------------------------
@@ -125,9 +242,9 @@ async def generate_plan(
 
     client = _get_client()
 
-    # kimi-k2.6 响应慢，重试 2 次，单次超时 300 秒
+    # kimi-k2.6 响应慢，重试 2 次，单次超时 600 秒（10 分钟）
     max_attempts = 2
-    timeout_seconds = 300
+    timeout_seconds = 600
     last_error = None
 
     for attempt in range(1, max_attempts + 1):
@@ -187,6 +304,7 @@ async def generate_plan(
 
         try:
             plan = json.loads(content)
+            logger.info(f"[Plan] json.loads 成功，plan type={type(plan).__name__}")
         except json.JSONDecodeError as exc:
             logger.error(f"[Plan] LLM 返回非 JSON: {content[:500]}")
             last_error = f"LLM 返回格式错误（非 JSON）: {exc}"
@@ -194,13 +312,42 @@ async def generate_plan(
                 continue
             raise RuntimeError(last_error)
 
+        # 处理双重 JSON 序列化（如 LLM 返回被引号包裹的 JSON 字符串）
+        if isinstance(plan, str):
+            logger.warning(f"[Plan] plan 是字符串而非 dict，尝试二次解析...")
+            try:
+                plan = json.loads(plan)
+                logger.info(f"[Plan] 二次解析成功，plan type={type(plan).__name__}")
+            except json.JSONDecodeError as exc:
+                logger.error(f"[Plan] 二次解析失败: {plan[:500]}")
+                last_error = f"LLM 返回双重序列化 JSON 解析失败: {exc}"
+                if attempt < max_attempts:
+                    continue
+                raise RuntimeError(last_error)
+
         # 校验必要字段
-        if "tool_calls" not in plan:
-            last_error = "LLM 输出缺少 tool_calls 字段"
+        if not isinstance(plan, dict):
+            logger.error(f"[Plan] plan 不是 dict，实际 type={type(plan).__name__}: {str(plan)[:200]}")
+            last_error = f"LLM 返回格式错误（不是 dict 而是 {type(plan).__name__}）"
             if attempt < max_attempts:
-                logger.warning(f"[Plan] {last_error}，自动重试...")
                 continue
             raise RuntimeError(last_error)
+
+        if "tool_calls" not in plan:
+            logger.error(f"[Plan] LLM 输出缺少 tool_calls 字段，plan keys={list(plan.keys())}")
+            last_error = "LLM 输出缺少 tool_calls 字段"
+            if attempt < max_attempts:
+                continue
+            raise RuntimeError(last_error)
+
+        # 如果 attempt 1 成功了，直接返回，不要继续 attempt 2
+        logger.info(f"[Plan] attempt {attempt} 验证通过，直接返回")
+        break
+
+    # 如果循环因为 break 退出，plan 已经准备好了
+    # 如果循环正常结束（没有 break），说明所有 attempt 都失败了
+    if 'plan' not in locals() or plan is None:
+        raise RuntimeError(last_error or "LLM 接口选型未知错误")
 
     # 强制兜底：如果 LLM 没提取到过滤条件，用前端传入的值
     filters = plan.get("filters", {})
@@ -344,126 +491,119 @@ def _extract_timestamp(video: dict) -> int:
 
 
 # ------------------------------------------------------------------------------
-# 批量执行引擎
+# 批量执行引擎（后台运行模式）
 # ------------------------------------------------------------------------------
 
 async def run_batch_task(
     question: str,
     creators: list[dict],
     plan: dict[str, Any],
-) -> AsyncGenerator[str, None]:
-    """执行批量抓取任务，通过 SSE 流式返回进度。
-    AsyncGenerator[str, None]:异步生成器
+    task_id: str = "",
+) -> None:
+    """执行批量抓取任务（纯后台运行），进度写入 task_cache。
+
+    前端通过 /api/task-progress/{task_id} SSE 或 /api/task-status 轮询获取进度。
     """
-    logger.info(f"[Batch] 开始批量任务，达人: {len(creators)}")
-    yield _sse_event("start", {"message": "开始批量抓取任务", "total_creators": len(creators)})
+    logger.info(f"[Batch][{task_id}] 开始批量任务，达人: {len(creators)}")
+
+    # 初始化取消信号和缓存（每个任务完全独立）
+    cancel_event = asyncio.Event()
+    if task_id:
+        task_cancel_events[task_id] = cancel_event
+        await _update_task_cache(task_id, total=len(creators), status="running")
 
     filters = plan.get("filters", {})
     topic = filters.get("topic", "")
     start_date = filters.get("start_date", "")
 
-    logger.info(f"[Batch] 最终过滤条件: topic={topic!r}, start_date={start_date!r}")
+    logger.info(f"[Batch][{task_id}] 最终过滤条件: topic={topic!r}, start_date={start_date!r}")
 
-    # 如果 topic 为空，直接报错——说明 LLM 没提取到，前端也没兜底
     if not topic:
-        logger.error("[Batch] topic 为空！LLM 未提取到话题关键词，且前端未传入")
-        yield _sse_event("error", {"message": "未识别到话题关键词，请在「话题关键词」输入框中填写"})
-        yield _sse_event("done", {})
+        logger.error(f"[Batch][{task_id}] topic 为空！")
+        if task_id:
+            await _update_task_cache(task_id, status="error")
+            _cleanup_cancel_event(task_id)
+            _schedule_task_cleanup(task_id)
         return
 
-    # 解析 start_date 为时间戳
     start_timestamp = None
     if start_date:
         try:
             start_timestamp = int(datetime.strptime(start_date, "%Y-%m-%d").timestamp())
-            logger.info(f"[Batch] 时间戳过滤: >= {start_timestamp} ({start_date})")
         except ValueError:
-            logger.warning(f"[Batch] start_date 格式错误: {start_date}")
+            pass
 
     all_matched_videos: list[dict] = []
-
-    # 限定最大并发次数
     semaphore = asyncio.Semaphore(settings.BATCH_CONCURRENCY)
 
     async def process_one_creator(creator: dict, idx: int) -> list[dict]:
         upper_mid = creator.get("upper_mid")
         nickname = creator.get("nickname", f"UP主_{upper_mid}")
-        logger.info(f"[Batch] 处理达人 {idx+1}/{len(creators)}: {nickname} (mid={upper_mid})")
         matched: list[dict] = []
 
         async with semaphore:
-            # 1. 翻页获取视频列表
+            # 检查是否已取消
+            if cancel_event.is_set():
+                logger.info(f"[Batch][{task_id}]   {nickname} - 跳过（任务已取消）")
+                return matched
+
             all_videos: list[dict] = []
             for pn in range(1, settings.MAX_PAGE_PER_UP + 1):
-                logger.info(f"[Batch]   {nickname} - 获取视频列表 page={pn}")
-                data = await get_video_list(upper_mid=upper_mid, pn=pn)
-
-                # 如果 API 返回错误结构
-                if isinstance(data, dict) and "error" in data:
-                    logger.warning(f"[Batch]   {nickname} - page={pn} API 错误: {data.get('error')}")
+                if cancel_event.is_set():
                     break
 
-                # DEBUG: 打印 API 返回的原始结构 keys
-                data_keys = list(data.keys()) if isinstance(data, dict) else type(data).__name__
-                logger.info(f"[Batch]   {nickname} - API 返回顶层 keys: {data_keys}")
+                data = await get_video_list(upper_mid=upper_mid, pn=pn)
+                if isinstance(data, dict) and "error" in data:
+                    break
 
-                # 使用兼容函数提取视频列表
                 vlist = _extract_vlist(data)
                 if not vlist:
-                    logger.info(f"[Batch]   {nickname} - page={pn} 无视频，结束翻页")
                     break
-
                 all_videos.extend(vlist)
-                logger.info(f"[Batch]   {nickname} - page={pn} 获取 {len(vlist)} 条视频")
 
                 page_info = _extract_page_info(data)
-                total_count = page_info.get("count", 0)
-                ps = page_info.get("ps", 50)
-                if pn * ps >= total_count:
-                    logger.info(f"[Batch]   {nickname} - 已到达最后一页")
+                if pn * page_info.get("ps", 50) >= page_info.get("count", 0):
                     break
 
-            logger.info(f"[Batch]   {nickname} - 共获取 {len(all_videos)} 条视频")
+            # 按 bvid 去重：防止 API 分页返回重叠数据
+            seen_bvids = set()
+            deduped_videos = []
+            for v in all_videos:
+                bvid = v.get("bvid")
+                if bvid and bvid not in seen_bvids:
+                    seen_bvids.add(bvid)
+                    deduped_videos.append(v)
+            if len(deduped_videos) < len(all_videos):
+                logger.info(f"[Batch][{task_id}] {nickname} 分页去重: {len(all_videos)} -> {len(deduped_videos)} 条")
+            all_videos = deduped_videos
 
-            # 2. 按发布时间过滤（兼容 created / pubdate / ctime 等多种字段名）
             candidate_videos = []
             for v in all_videos:
+                if cancel_event.is_set():
+                    break
                 ts = _extract_timestamp(v)
                 if start_timestamp and ts > 0 and ts < start_timestamp:
                     continue
                 candidate_videos.append(v)
-            logger.info(f"[Batch]   {nickname} - 时间过滤后剩余 {len(candidate_videos)} 条")
 
-            # 3. 获取视频详情（含标签）并做话题过滤
             for v in candidate_videos:
+                if cancel_event.is_set():
+                    break
                 bvid = v.get("bvid")
                 if not bvid:
                     continue
-
                 detail = await get_video_detail(id=bvid)
                 if isinstance(detail, dict) and "error" in detail:
-                    logger.warning(f"[Batch]   {nickname} - {bvid} detail API 错误: {detail.get('error')}")
                     continue
 
                 view, tags, participle = _extract_video_detail(detail)
-
-                # 话题过滤（在标题、描述、动态、标签、分词中全文匹配）
                 tag_names = [t.get("tag_name", "") for t in tags if isinstance(t, dict)]
                 all_tags_text = " ".join(tag_names + participle)
-                title = view.get("title", "")
-                desc = view.get("desc", "")
-                dynamic = view.get("dynamic", "")
-                combined_text = f"{title} {desc} {dynamic} {all_tags_text}"
+                combined_text = f"{view.get('title', '')} {view.get('desc', '')} {view.get('dynamic', '')} {all_tags_text}"
 
-                # 支持 #话题 和 话题 互相匹配：统一去掉 # 号后比较
                 search_topic = topic.lstrip("#").strip()
-                if not search_topic:
-                    continue
-                if search_topic.lower() not in combined_text.lower():
-                    continue
-
-                matched.append(
-                    {
+                if search_topic and search_topic.lower() in combined_text.lower():
+                    matched.append({
                         "creator_nickname": nickname,
                         "creator_mid": upper_mid,
                         "bvid": bvid,
@@ -478,49 +618,60 @@ async def run_batch_task(
                         "participle": participle,
                         "stat": view.get("stat", {}),
                         "url": f"https://www.bilibili.com/video/{bvid}",
-                    }
-                )
-
-            logger.info(f"[Batch]   {nickname} - 匹配 {len(matched)} 条视频")
+                    })
 
         return matched
 
-    # 并发执行所有达人
-    tasks = [process_one_creator(c, i) for i, c in enumerate(creators)]
+    # 并发执行所有达人（每个 run_batch_task 调用有自己的 tasks 列表，完全隔离）
+    tasks = [asyncio.create_task(process_one_creator(c, i)) for i, c in enumerate(creators)]
+    cancel_watcher = asyncio.create_task(_watch_cancel(task_id, cancel_event, tasks))
 
     completed = 0
-    for coro in asyncio.as_completed(tasks):
-        matched = await coro
-        all_matched_videos.extend(matched)
-        completed += 1
-        logger.info(f"[Batch] 进度: {completed}/{len(creators)}, 累计匹配: {len(all_matched_videos)}")
-        yield _sse_event(
-            "progress",
-            {
-                "completed": completed,
-                "total": len(creators),
-                "matched_so_far": len(all_matched_videos),
-            },
+    try:
+        for coro in asyncio.as_completed(tasks):
+            matched = await coro
+            if cancel_event.is_set():
+                break
+            all_matched_videos.extend(matched)
+            completed += 1
+            if task_id:
+                await _update_task_cache(
+                    task_id,
+                    completed=completed,
+                    matched_so_far=len(all_matched_videos),
+                    videos=all_matched_videos,
+                )
+            logger.info(f"[Batch][{task_id}] 进度: {completed}/{len(creators)}, 累计匹配: {len(all_matched_videos)}")
+    except asyncio.CancelledError:
+        logger.info(f"[Batch][{task_id}] 任务被取消（CancelWatcher 触发）")
+    finally:
+        # 清理 cancel_watcher
+        if not cancel_watcher.done():
+            cancel_watcher.cancel()
+        try:
+            await cancel_watcher
+        except asyncio.CancelledError:
+            pass
+
+        # 取消所有未完成的子任务
+        pending = [t for t in tasks if not t.done()]
+        if pending:
+            for t in pending:
+                t.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    if task_id:
+        _cleanup_cancel_event(task_id)
+
+    status = "cancelled" if cancel_event.is_set() else "completed"
+    logger.info(f"[Batch][{task_id}] 任务结束，状态={status}, 共匹配 {len(all_matched_videos)} 条视频")
+
+    if task_id:
+        await _update_task_cache(
+            task_id,
+            status=status,
+            completed=completed,
+            matched_so_far=len(all_matched_videos),
+            videos=all_matched_videos,
         )
-
-    logger.info(f"[Batch] 任务完成，共匹配 {len(all_matched_videos)} 条视频")
-    yield _sse_event(
-        "final",
-        {
-            "total_creators": len(creators),
-            "matched_videos": len(all_matched_videos),
-            "videos": all_matched_videos,
-        },
-    )
-    yield _sse_event("done", {})
-
-
-
-def _sse_event(event: str, data: dict) -> str:
-    """将事件打包为 SSE 标准格式字符串。"""
-    payload = {
-        "event": event,
-        "content": data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        _schedule_task_cleanup(task_id)

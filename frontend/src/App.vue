@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { fetchEventSource } from '@microsoft/fetch-event-source'
 import * as XLSX from 'xlsx'
 import { ElMessage } from 'element-plus'
@@ -11,7 +11,14 @@ import { UploadFilled } from '@element-plus/icons-vue'
 
 const loading = ref(false)
 const isPlanning = ref(false)
+// SSE 连接的 AbortController（批量抓取阶段）
 const abortController = ref(null)
+// plan-task 请求的 AbortController（规划阶段）
+const planAbortController = ref(null)
+// 页面恢复轮询定时器
+let recoveryPollingTimer = null
+// 防止重复启动任务（fetchEventSource 内部 retry 或用户快速双击）
+let isStartingTask = false
 
 const form = reactive({
   question: '抓取这些达人发布的带星布谷地话题的视频，从2026年4月21日开始',
@@ -45,6 +52,9 @@ const progress = reactive({
 
 // 错误信息
 const errorMsg = ref('')
+
+// 当前任务 ID（用于取消和恢复）
+const currentTaskId = ref('')
 
 
 // =============================================================================
@@ -96,7 +106,23 @@ async function previewExcel() {
 async function startTask() {
   if (!form.file) { ElMessage.warning('请先上传 Excel'); return }
   if (!form.question.trim()) { ElMessage.warning('请输入抓取需求'); return }
+
+  // 强防护 1：如果当前已有任务在跑（currentTaskId 存在），直接拒绝
+  if (currentTaskId.value) {
+    ElMessage.warning('已有任务在运行，请先等待完成或取消')
+    return
+  }
+  // 强防护 2：如果 sessionStorage 里还存着未完成的任务（页面刷新过），让 onMounted 恢复逻辑处理，不要新建
+  const savedTaskId = sessionStorage.getItem('current_task_id')
+  if (savedTaskId) {
+    ElMessage.info('检测到未完成的任务，正在自动恢复进度...')
+    return
+  }
+  // 强防护 3：防止快速重复点击或 fetchEventSource 内部 retry 导致重复进入
+  if (isStartingTask) { return }
   if (loading.value) { ElMessage.warning('任务正在进行中，请勿重复点击'); return }
+
+  isStartingTask = true
 
   // 重置
   loading.value = true
@@ -111,9 +137,10 @@ async function startTask() {
   progress.percent = 0
   errorMsg.value = ''
 
-  // Step 1: 先通过同步接口拿到 LLM 执行计划（避免 SSE 内长时间无数据导致断连重试）
+  // Step 1: 先通过同步接口拿到 LLM 执行计划
   let plan = null
   try {
+    planAbortController.value = new AbortController()
     const planRes = await fetch('/api/plan-task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -122,6 +149,7 @@ async function startTask() {
         topic: form.topic,
         start_date: form.startDate,
       }),
+      signal: planAbortController.value.signal,
     })
     const planJson = await planRes.json()
     if (!planRes.ok || planJson.code !== 0) {
@@ -131,29 +159,72 @@ async function startTask() {
     llmPlan.value = plan
     ElMessage.success('AI 接口选型完成')
   } catch (e) {
+    isStartingTask = false
+    if (planAbortController.value && planAbortController.value.signal.aborted) {
+      loading.value = false
+      isPlanning.value = false
+      planAbortController.value = null
+      return
+    }
     errorMsg.value = e.message || '接口选型失败'
     ElMessage.error(errorMsg.value)
     loading.value = false
     isPlanning.value = false
+    planAbortController.value = null
     return
   }
 
+  planAbortController.value = null
   isPlanning.value = false
 
-  // Step 2: 拿到 plan 后再开 SSE 执行批量任务，并把 plan_json 传给后端
-  const data = new FormData()
-  data.append('question', form.question)
-  data.append('file', form.file)
-  if (form.topic) data.append('topic', form.topic)
-  if (form.startDate) data.append('start_date', form.startDate)
-  data.append('plan_json', JSON.stringify(plan))
+  // Step 2: 校验 file
+  if (!form.file || !(form.file instanceof File)) {
+    isStartingTask = false
+    ElMessage.error('文件对象无效，请重新上传 Excel')
+    loading.value = false
+    return
+  }
 
+  // Step 3: POST /api/start-task 创建后台任务
+  const startData = new FormData()
+  startData.append('question', form.question)
+  startData.append('file', form.file)
+  if (form.topic) startData.append('topic', form.topic)
+  if (form.startDate) startData.append('start_date', form.startDate)
+  startData.append('plan_json', JSON.stringify(plan))
+
+  let taskId
+  try {
+    const startRes = await fetch('/api/start-task', { method: 'POST', body: startData })
+    const startJson = await startRes.json()
+    if (!startRes.ok || startJson.code !== 0) {
+      throw new Error(startJson.detail || startJson.message || '创建任务失败')
+    }
+    taskId = startJson.task_id
+    currentTaskId.value = taskId
+    sessionStorage.setItem('current_task_id', taskId)
+    ElMessage.success('任务已创建，开始批量抓取')
+  } catch (e) {
+    isStartingTask = false
+    errorMsg.value = e.message || '创建任务失败'
+    ElMessage.error(errorMsg.value)
+    loading.value = false
+    return
+  }
+
+  // Step 4: 开 SSE 接收进度
+  connectSSE(taskId)
+  isStartingTask = false
+}
+
+function connectSSE(taskId) {
   abortController.value = new AbortController()
 
-  fetchEventSource('/api/batch-task-from-excel', {
-    method: 'POST',
-    body: data,
+  fetchEventSource(`/api/task-progress/${taskId}`, {
+    method: 'GET',
     signal: abortController.value.signal,
+    // 页面切换到后台时保持连接
+    openWhenHidden: true,
     onmessage(msg) {
       if (!msg.data) return
       try {
@@ -162,27 +233,107 @@ async function startTask() {
       } catch (e) { console.warn('解析失败:', msg.data) }
     },
     onclose() {
-      loading.value = false
+      // 主动取消
+      if (abortController.value && abortController.value.signal.aborted) {
+        throw new Error('SSE aborted by user')
+      }
+      // 非主动断开 → 切换到轮询
+      if (currentTaskId.value && !recoveryPollingTimer) {
+        ElMessage.info('连接已断开，自动切换为进度轮询模式')
+        startPolling(currentTaskId.value)
+      } else {
+        loading.value = false
+      }
+      throw new Error('SSE connection closed')
     },
     onerror(err) {
-      loading.value = false
-      // 用户主动取消时不报错误
+      // 主动取消时静默处理，不报红字
       if (abortController.value && abortController.value.signal.aborted) {
         return
       }
-      errorMsg.value = '连接中断: ' + (err.message || '未知错误')
-      ElMessage.error(errorMsg.value)
       throw err
     },
   })
 }
 
-function stopTask() {
+function startPolling(taskId) {
+  if (recoveryPollingTimer) return
+  recoveryPollingTimer = setInterval(async () => {
+    try {
+      const pollRes = await fetch(`/api/task-status?task_id=${taskId}`)
+      const pollJson = await pollRes.json()
+      if (!pollRes.ok || pollJson.code !== 0) {
+        clearInterval(recoveryPollingTimer)
+        recoveryPollingTimer = null
+        loading.value = false
+        sessionStorage.removeItem('current_task_id')
+        return
+      }
+      const d = pollJson.data
+      progress.completed = d.completed || 0
+      progress.total = d.total || 0
+      progress.percent = progress.total > 0
+        ? Math.round((progress.completed / progress.total) * 100)
+        : 0
+      result.matchedVideos = d.matched_so_far || 0
+      result.totalCreators = d.total || 0
+      if (d.videos && d.videos.length > 0) {
+        result.videos = d.videos
+      }
+      const s = d.status || ''
+      if (s === 'completed' || s === 'cancelled' || s === 'done') {
+        clearInterval(recoveryPollingTimer)
+        recoveryPollingTimer = null
+        loading.value = false
+        currentTaskId.value = ''
+        sessionStorage.removeItem('current_task_id')
+        if (s === 'completed') {
+          ElMessage.success('任务已完成！')
+        } else if (s === 'cancelled') {
+          ElMessage.info('任务已取消')
+        }
+      }
+    } catch (e) {
+      console.warn('轮询失败:', e)
+    }
+  }, 2000)
+}
+
+async function stopTask() {
+  // ---- 阶段 1：规划阶段（LLM 选型）正在进行中 ----
+  if (isPlanning.value && planAbortController.value) {
+    planAbortController.value.abort()
+    planAbortController.value = null
+    loading.value = false
+    isPlanning.value = false
+    ElMessage.info('已取消规划')
+    return
+  }
+
+  // ---- 阶段 2：批量抓取阶段（SSE 已建立） ----
+  // 先通知后端取消任务，再断开 SSE
+  if (currentTaskId.value) {
+    try {
+      const data = new FormData()
+      data.append('task_id', currentTaskId.value)
+      await fetch('/api/cancel-task', { method: 'POST', body: data })
+    } catch (e) {
+      console.warn('取消请求失败:', e)
+    }
+    currentTaskId.value = ''
+  }
+  // 停止恢复轮询（如果有）
+  if (recoveryPollingTimer) {
+    clearInterval(recoveryPollingTimer)
+    recoveryPollingTimer = null
+  }
   if (abortController.value) {
     abortController.value.abort()
-    loading.value = false
-    ElMessage.info('已取消')
+    abortController.value = null
   }
+  loading.value = false
+  sessionStorage.removeItem('current_task_id')
+  ElMessage.info('已取消')
 }
 
 // =============================================================================
@@ -192,8 +343,13 @@ function stopTask() {
 function handleEvent(payload) {
   switch (payload.event) {
     case 'start':
+      // 兼容旧模式（新架构下 SSE 不再推送 start，但保留以防万一）
       result.totalCreators = payload.content.total_creators || 0
       progress.total = payload.content.total_creators || 0
+      if (payload.content.task_id) {
+        currentTaskId.value = payload.content.task_id
+        sessionStorage.setItem('current_task_id', payload.content.task_id)
+      }
       break
 
     case 'thought':
@@ -207,6 +363,24 @@ function handleEvent(payload) {
         ? Math.round((progress.completed / progress.total) * 100)
         : 0
       result.matchedVideos = payload.content.matched_so_far || 0
+      break
+
+    case 'resume':
+      // 刷新恢复 / SSE 首次连接：从后端缓存恢复状态快照
+      if (payload.content.task_id) {
+        currentTaskId.value = payload.content.task_id
+        sessionStorage.setItem('current_task_id', payload.content.task_id)
+      }
+      progress.completed = payload.content.completed || 0
+      progress.total = payload.content.total || 0
+      progress.percent = progress.total > 0
+        ? Math.round((progress.completed / progress.total) * 100)
+        : 0
+      result.matchedVideos = payload.content.matched_so_far || 0
+      result.totalCreators = payload.content.total || 0
+      if (payload.content.videos) {
+        result.videos = payload.content.videos
+      }
       break
 
     case 'final':
@@ -223,6 +397,8 @@ function handleEvent(payload) {
 
     case 'done':
       loading.value = false
+      sessionStorage.removeItem('current_task_id')
+      currentTaskId.value = ''
       break
   }
 }
@@ -265,6 +441,64 @@ function formatDate(ts) {
   const d = new Date(ts * 1000)
   return d.toLocaleString('zh-CN')
 }
+
+// =============================================================================
+// 页面加载时检查是否有未完成的任务（轮询恢复，不重建 SSE）
+// =============================================================================
+
+onMounted(async () => {
+  const savedTaskId = sessionStorage.getItem('current_task_id')
+  if (!savedTaskId) return
+
+  try {
+    const res = await fetch(`/api/task-status?task_id=${savedTaskId}`)
+    const json = await res.json()
+    if (!res.ok || json.code !== 0) {
+      sessionStorage.removeItem('current_task_id')
+      return
+    }
+
+    const data = json.data
+    const status = data.status || ''
+
+    // 恢复状态到 UI
+    currentTaskId.value = savedTaskId
+    progress.completed = data.completed || 0
+    progress.total = data.total || 0
+    progress.percent = progress.total > 0
+      ? Math.round((progress.completed / progress.total) * 100)
+      : 0
+    result.matchedVideos = data.matched_so_far || 0
+    result.totalCreators = data.total || 0
+    result.videos = data.videos || []
+
+    if (status === 'completed' || status === 'cancelled' || status === 'done') {
+      loading.value = false
+      if (status === 'completed') {
+        ElMessage.success('任务已完成，已恢复结果')
+      }
+      sessionStorage.removeItem('current_task_id')
+      currentTaskId.value = ''
+      return
+    }
+
+    // 任务仍在运行中 → 直接重建 SSE 接收实时进度
+    loading.value = true
+    ElMessage.info('检测到正在进行的任务，已恢复 SSE 连接')
+    connectSSE(savedTaskId)
+  } catch (e) {
+    console.warn('恢复任务失败:', e)
+    sessionStorage.removeItem('current_task_id')
+  }
+})
+
+onUnmounted(() => {
+  // 页面卸载时清理轮询定时器，但不取消后台任务（让其继续在服务器端运行）
+  if (recoveryPollingTimer) {
+    clearInterval(recoveryPollingTimer)
+    recoveryPollingTimer = null
+  }
+})
 </script>
 
 <template>
