@@ -19,6 +19,8 @@ const planAbortController = ref(null)
 let recoveryPollingTimer = null
 // 防止重复启动任务（fetchEventSource 内部 retry 或用户快速双击）
 let isStartingTask = false
+// 标记是否用户主动点击了取消（用于 SSE onclose 判断，避免依赖 abortController）
+let isUserCancelled = false
 
 const form = reactive({
   question: '抓取这些达人发布的带星布谷地话题的视频，从2026年4月21日开始',
@@ -123,6 +125,7 @@ async function startTask() {
   if (loading.value) { ElMessage.warning('任务正在进行中，请勿重复点击'); return }
 
   isStartingTask = true
+  isUserCancelled = false
 
   // 重置
   loading.value = true
@@ -160,7 +163,8 @@ async function startTask() {
     ElMessage.success('AI 接口选型完成')
   } catch (e) {
     isStartingTask = false
-    if (planAbortController.value && planAbortController.value.signal.aborted) {
+    // 用户主动取消时（stopTask 已设置 isUserCancelled），静默处理
+    if (isUserCancelled || (planAbortController.value && planAbortController.value.signal.aborted)) {
       loading.value = false
       isPlanning.value = false
       planAbortController.value = null
@@ -206,6 +210,11 @@ async function startTask() {
     ElMessage.success('任务已创建，开始批量抓取')
   } catch (e) {
     isStartingTask = false
+    // 用户主动取消时静默处理
+    if (isUserCancelled) {
+      loading.value = false
+      return
+    }
     errorMsg.value = e.message || '创建任务失败'
     ElMessage.error(errorMsg.value)
     loading.value = false
@@ -218,6 +227,7 @@ async function startTask() {
 }
 
 function connectSSE(taskId) {
+  isUserCancelled = false
   abortController.value = new AbortController()
 
   fetchEventSource(`/api/task-progress/${taskId}`, {
@@ -233,9 +243,9 @@ function connectSSE(taskId) {
       } catch (e) { console.warn('解析失败:', msg.data) }
     },
     onclose() {
-      // 主动取消
-      if (abortController.value && abortController.value.signal.aborted) {
-        throw new Error('SSE aborted by user')
+      // 主动取消：静默关闭，不 throw（避免错误冒泡到页面）
+      if (isUserCancelled) {
+        return
       }
       // 非主动断开 → 切换到轮询
       if (currentTaskId.value && !recoveryPollingTimer) {
@@ -244,11 +254,12 @@ function connectSSE(taskId) {
       } else {
         loading.value = false
       }
+      // 非主动断开时 throw，阻止 fetchEventSource 自动重试
       throw new Error('SSE connection closed')
     },
     onerror(err) {
       // 主动取消时静默处理，不报红字
-      if (abortController.value && abortController.value.signal.aborted) {
+      if (isUserCancelled) {
         return
       }
       throw err
@@ -300,39 +311,57 @@ function startPolling(taskId) {
 }
 
 async function stopTask() {
+  // 统一获取 task_id（currentTaskId 优先，其次 sessionStorage）
+  const taskId = currentTaskId.value || sessionStorage.getItem('current_task_id')
+
+  // 标记用户主动取消（必须在 abort 之前设置，供 onclose/onerror 读取）
+  isUserCancelled = true
+
   // ---- 阶段 1：规划阶段（LLM 选型）正在进行中 ----
-  if (isPlanning.value && planAbortController.value) {
+  if (planAbortController.value) {
     planAbortController.value.abort()
     planAbortController.value = null
     loading.value = false
     isPlanning.value = false
     ElMessage.info('已取消规划')
+    // 即使规划阶段，如果已经有 task_id 也通知后端取消
+    if (taskId) {
+      try {
+        const data = new FormData()
+        data.append('task_id', taskId)
+        await fetch('/api/cancel-task', { method: 'POST', body: data })
+      } catch (e) {
+        console.warn('取消请求失败:', e)
+      }
+    }
     return
   }
 
-  // ---- 阶段 2：批量抓取阶段（SSE 已建立） ----
-  // 先通知后端取消任务，再断开 SSE
-  if (currentTaskId.value) {
-    try {
-      const data = new FormData()
-      data.append('task_id', currentTaskId.value)
-      await fetch('/api/cancel-task', { method: 'POST', body: data })
-    } catch (e) {
-      console.warn('取消请求失败:', e)
-    }
-    currentTaskId.value = ''
+  // ---- 阶段 2：批量抓取阶段（SSE 已建立或在轮询中） ----
+  // 先断开 SSE（触发 onclose），再通知后端取消
+  if (abortController.value) {
+    abortController.value.abort()
+    abortController.value = null
   }
   // 停止恢复轮询（如果有）
   if (recoveryPollingTimer) {
     clearInterval(recoveryPollingTimer)
     recoveryPollingTimer = null
   }
-  if (abortController.value) {
-    abortController.value.abort()
-    abortController.value = null
+  // 通知后端取消任务
+  if (taskId) {
+    try {
+      const data = new FormData()
+      data.append('task_id', taskId)
+      await fetch('/api/cancel-task', { method: 'POST', body: data })
+    } catch (e) {
+      console.warn('取消请求失败:', e)
+    }
+    currentTaskId.value = ''
+    sessionStorage.removeItem('current_task_id')
   }
   loading.value = false
-  sessionStorage.removeItem('current_task_id')
+  isPlanning.value = false
   ElMessage.info('已取消')
 }
 
