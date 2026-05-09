@@ -167,6 +167,140 @@ async def get_video_detail(id: str) -> dict:
 
 
 # ------------------------------------------------------------------------------
+# 接口 6：解析短链接
+# ------------------------------------------------------------------------------
+
+
+async def resolve_short_url(short_code: str) -> dict:
+    """解析B站短链接为真实URL，提取bvid/avid/mid。
+
+    Args:
+        short_code: 短链接代码，如 b23.tv/xxxx 中的 xxxx 部分。
+
+    Returns:
+        包含 bvid / avid / mid / resolved_url 的 dict。
+        失败时返回 {"error": "...", "detail": "..."}。
+    """
+    if not short_code:
+        return {"error": "短链接代码为空"}
+
+    url = f"https://b23.tv/{short_code}"
+    try:
+        # 使用支持 cookie 持久化的 client，B站短链接可能需要 cookie
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            # 第一次请求：获取最终跳转 URL
+            response = await client.get(
+                url,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Connection": "keep-alive",
+                    "Upgrade-Insecure-Requests": "1",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "none",
+                },
+            )
+
+            # 获取最终 URL（follow_redirects=True 会自动跟随 302）
+            final_url = str(response.url)
+
+            # B站短链接可能返回 200 + JS 跳转（而不是 302），需要手动解析 HTML
+            if "b23.tv/" in final_url or "bilibili.com" not in final_url:
+                html = response.text
+
+                # 1. 尝试 meta refresh
+                meta_match = re.search(
+                    r'<meta[^>]*http-equiv=["\']?refresh["\']?[^>]*content=["\']?\d+;\s*url=([^"\'>\s]+)',
+                    html, re.IGNORECASE
+                )
+                if meta_match:
+                    final_url = meta_match.group(1)
+                else:
+                    # 2. 尝试 JS window.location.href / location.replace
+                    js_match = re.search(
+                        r'(?:window\.)?location\.(?:href|replace|assign)\s*=\s*["\']([^"\']+)["\']',
+                        html
+                    )
+                    if js_match:
+                        final_url = js_match.group(1)
+                    else:
+                        # 3. 尝试 window.location = "..."
+                        js_match2 = re.search(
+                            r'(?:window\.)?location\s*=\s*["\']([^"\']+)["\']',
+                            html
+                        )
+                        if js_match2:
+                            final_url = js_match2.group(1)
+                        else:
+                            # 4. 尝试 href 链接（找 bilibili.com 相关链接）
+                            href_match = re.search(
+                                r'href=["\'](https?://(?:www\.)?bilibili\.com/[^"\']+)["\']',
+                                html
+                            )
+                            if href_match:
+                                final_url = href_match.group(1)
+
+                # 处理相对 URL
+                if final_url.startswith("/"):
+                    final_url = f"https://b23.tv{final_url}"
+
+                # 如果解析出了新 URL 且不是当前 URL，再次请求
+                if final_url and final_url != str(response.url):
+                    try:
+                        resp2 = await client.get(
+                            final_url,
+                            headers={
+                                "User-Agent": (
+                                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                                )
+                            },
+                        )
+                        final_url = str(resp2.url)
+                    except Exception:
+                        pass
+
+            result: dict[str, Any] = {"resolved_url": final_url}
+
+            # 提取 bvid（兼容大小写）
+            bv_match = re.search(r"bilibili\.com/video/(BV\w+)", final_url, re.IGNORECASE)
+            if bv_match:
+                result["bvid"] = bv_match.group(1)
+
+            # 提取 avid
+            av_match = re.search(r"bilibili\.com/video/av(\d+)", final_url, re.IGNORECASE)
+            if av_match:
+                result["avid"] = int(av_match.group(1))
+
+            # 提取 mid
+            mid_match = re.search(r"space\.bilibili\.com/(\d+)", final_url, re.IGNORECASE)
+            if mid_match:
+                result["mid"] = int(mid_match.group(1))
+
+            import logging as _logging
+            _logger = _logging.getLogger(__name__)
+            _logger.info(
+                f"[ShortURL] {short_code} status={response.status_code} "
+                f"history={[str(h.url) for h in response.history]} "
+                f"→ {final_url} | bvid={result.get('bvid')} mid={result.get('mid')}"
+            )
+
+            return result
+    except httpx.TimeoutException:
+        return {"error": "短链接解析超时", "detail": f"{url} 在 30s 内未响应"}
+    except httpx.RequestError as exc:
+        return {"error": "短链接解析请求失败", "detail": str(exc)}
+    except Exception as exc:
+        return {"error": "短链接解析异常", "detail": f"{type(exc).__name__}: {exc}"}
+
+
+# ------------------------------------------------------------------------------
 # 接口注册表（供 Executor 动态反射发现）
 # key 必须与 api_schema.json 中的 tool.name 保持一致
 # ------------------------------------------------------------------------------
@@ -177,6 +311,7 @@ API_REGISTRY = {
     "get_video_list": get_video_list,
     "get_video_data": get_video_data,
     "get_video_detail": get_video_detail,
+    "resolve_short_url": resolve_short_url,
 }
 
 # 同步辅助函数注册表（用于非异步场景，如 Excel 解析时提取 mid）

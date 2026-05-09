@@ -42,7 +42,7 @@ class ChatRequest(BaseModel):
 
 
 class PlanTaskRequest(BaseModel):
-    """LLM 接口选型请求体（同步接口，不携带达人列表）。"""
+    """LLM 接口选型请求体（同步接口，可携带达人列表）。"""
 
     question: str = Field(
         ...,
@@ -57,6 +57,10 @@ class PlanTaskRequest(BaseModel):
     start_date: str | None = Field(
         default=None,
         description="开始日期兜底，格式 YYYY-MM-DD，如 '2026-04-21'",
+    )
+    creators: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="从 Excel 解析出的达人列表，用于让 LLM 做更精准的接口选型",
     )
 
 
@@ -129,6 +133,57 @@ class ToolResult(BaseModel):
     success: bool = Field(..., description="是否执行成功")
     data: Any = Field(default=None, description="成功时的返回数据")
     error: str | None = Field(default=None, description="失败时的错误信息")
+
+
+# =============================================================================
+# 工作流规划模型（通用工作流解释器架构）
+# =============================================================================
+
+class GlobalFilter(BaseModel):
+    """全局过滤条件。"""
+
+    topic: str = Field(default="", description="话题关键词，没有就留空字符串")
+    start_date: str = Field(default="", description="开始日期，格式 YYYY-MM-DD")
+    end_date: str = Field(default="", description="结束日期，格式 YYYY-MM-DD")
+
+
+class PageRule(BaseModel):
+    """分页采集规则。"""
+
+    enable_page: bool = Field(default=False, description="是否启用分页采集")
+    max_page: int = Field(default=1, description="最大翻页数")
+    page_size: int = Field(default=50, description="每页条数（用于判断是否翻页结束）")
+
+
+class ToolStep(BaseModel):
+    """工作流中的单个工具调用步骤。"""
+
+    tool_name: str = Field(..., description="工具名称，必须在可用工具白名单中")
+    reason: str = Field(default="", description="为什么需要这步，用一句话说明")
+
+
+class EachDetailRule(BaseModel):
+    """逐条查详情规则。"""
+
+    need_query: bool = Field(default=False, description="是否需要对列表中每条记录逐条查详情")
+    tool_name: str = Field(default="", description="详情查询工具名，如 get_video_detail")
+
+
+class Workflow(BaseModel):
+    """LLM 编排的单一工作流定义。所有 creator 都执行同一套 workflow。"""
+
+    tool_sequence: list[ToolStep] = Field(default_factory=list, description="工具调用顺序列表")
+    page_rule: PageRule = Field(default_factory=PageRule, description="分页规则（仅对最后一步返回列表的工具生效）")
+    each_detail: EachDetailRule = Field(default_factory=EachDetailRule, description="逐条详情规则")
+
+
+class LLMWorkflowPlan(BaseModel):
+    """LLM 一次性输出的完整工作流规划。"""
+
+    global_filter: GlobalFilter = Field(default_factory=GlobalFilter, description="全局过滤条件")
+    export_fields: list[str] = Field(default_factory=list, description="最终需要导出的字段列表")
+    workflow: Workflow = Field(default_factory=Workflow, description="工作流定义，所有 creator 统一执行")
+    reasoning: str = Field(default="", description="LLM 的推理过程，用中文简述")
 
 
 # =============================================================================

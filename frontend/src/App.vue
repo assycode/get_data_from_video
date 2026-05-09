@@ -43,6 +43,7 @@ const result = reactive({
   totalCreators: 0,
   matchedVideos: 0,
   videos: [],
+  exportFields: [],
 })
 
 // 进度
@@ -67,6 +68,26 @@ const hasResult = computed(() => result.videos.length > 0)
 
 const successCount = computed(() => creatorResults.value.filter(r => r.status === 'success').length)
 const errorCount = computed(() => creatorResults.value.filter(r => r.status === 'error').length)
+
+// 工作流步骤：把 tool_sequence + each_detail 合并为一个完整的步骤列表，用于时间线展示
+const workflowSteps = computed(() => {
+  if (!llmPlan.value || !llmPlan.value.workflow) return []
+  const wf = llmPlan.value.workflow
+  const steps = (wf.tool_sequence || []).map(s => ({
+    tool_name: s.tool_name,
+    reason: s.reason,
+    is_detail: false,
+  }))
+  // 如果启用了逐条详情，把 each_detail 作为独立步骤追加到时间线末尾
+  if (wf.each_detail && wf.each_detail.need_query && wf.each_detail.tool_name) {
+    steps.push({
+      tool_name: wf.each_detail.tool_name,
+      reason: `对列表中每条记录逐条调用 ${wf.each_detail.tool_name} 获取完整数据（标签、话题、详细统计等）`,
+      is_detail: true,
+    })
+  }
+  return steps
+})
 
 // =============================================================================
 // 文件上传
@@ -151,6 +172,7 @@ async function startTask() {
         question: form.question,
         topic: form.topic,
         start_date: form.startDate,
+        creators: parsedCreators.value,
       }),
       signal: planAbortController.value.signal,
     })
@@ -259,6 +281,42 @@ function connectSSE(taskId) {
     },
     onerror(err) {
       // 主动取消时静默处理，不报红字
+      if (isUserCancelled) {
+        return
+      }
+      throw err
+    },
+  })
+}
+
+function connectResumeSSE(taskId) {
+  isUserCancelled = false
+  abortController.value = new AbortController()
+
+  fetchEventSource(`/api/task-progress/${taskId}`, {
+    method: 'GET',
+    signal: abortController.value.signal,
+    openWhenHidden: true,
+    onmessage(msg) {
+      if (!msg.data) return
+      try {
+        const payload = JSON.parse(msg.data)
+        handleEvent(payload)
+      } catch (e) { console.warn('解析失败:', msg.data) }
+    },
+    onclose() {
+      if (isUserCancelled) {
+        return
+      }
+      if (currentTaskId.value && !recoveryPollingTimer) {
+        ElMessage.info('连接已断开，自动切换为进度轮询模式')
+        startPolling(currentTaskId.value)
+      } else {
+        loading.value = false
+      }
+      throw new Error('SSE connection closed')
+    },
+    onerror(err) {
       if (isUserCancelled) {
         return
       }
@@ -417,6 +475,9 @@ function handleEvent(payload) {
       if (payload.content.videos) {
         result.videos = payload.content.videos
       }
+      if (payload.content.export_fields) {
+        result.exportFields = payload.content.export_fields
+      }
       break
 
     case 'error':
@@ -433,31 +494,80 @@ function handleEvent(payload) {
 }
 
 // =============================================================================
+// 动态列配置
+// =============================================================================
+
+const COLUMN_MAP = {
+  creator_nickname: { label: 'UP主', width: 120 },
+  title: { label: '标题', minWidth: 200 },
+  pubdate: { label: '发布时间', width: 160 },
+  description: { label: '描述', minWidth: 200 },
+  dynamic: { label: '动态', minWidth: 150 },
+  duration: { label: '时长(秒)', width: 100 },
+  bvid: { label: 'BV号', width: 140 },
+  aid: { label: 'AID', width: 120 },
+  view: { label: '播放量', width: 100, align: 'right' },
+  danmaku: { label: '弹幕', width: 90, align: 'right' },
+  reply: { label: '评论', width: 90, align: 'right' },
+  favorite: { label: '收藏', width: 90, align: 'right' },
+  coin: { label: '投币', width: 90, align: 'right' },
+  share: { label: '分享', width: 90, align: 'right' },
+  like: { label: '点赞', width: 90, align: 'right' },
+  tags: { label: '标签', minWidth: 150 },
+  participle: { label: '话题', minWidth: 150 },
+  url: { label: '链接', width: 80 },
+  creator_mid: { label: 'UP主MID', width: 120 },
+  follower: { label: '粉丝数', width: 100, align: 'right' },
+  following: { label: '关注数', width: 100, align: 'right' },
+  sign: { label: '签名', minWidth: 200 },
+  level: { label: '等级', width: 80 },
+}
+
+const exportColumns = computed(() => {
+  const fields = result.exportFields && result.exportFields.length
+    ? result.exportFields
+    : Object.keys(result.videos[0] || {})
+  return fields.map(key => ({
+    key,
+    ...COLUMN_MAP[key],
+  })).filter(col => col.label)
+})
+
+function formatCellValue(row, key) {
+  const val = row[key]
+  if (val === undefined || val === null) return '-'
+  if (key === 'pubdate' && typeof val === 'number') return formatDate(val)
+  if (key === 'url') return val
+  if (['view', 'danmaku', 'reply', 'favorite', 'coin', 'share', 'like', 'follower', 'following'].includes(key)) {
+    return typeof val === 'number' ? val.toLocaleString() : val
+  }
+  if (key === 'tags' && Array.isArray(val)) {
+    return val.slice(0, 3).map(t => t.tag_name || t).join('、') || '-'
+  }
+  if (key === 'participle' && Array.isArray(val)) {
+    return val.join('、') || '-'
+  }
+  if (key === 'duration' && typeof val === 'number') {
+    const m = Math.floor(val / 60)
+    const s = val % 60
+    return m > 0 ? `${m}分${s}秒` : `${s}秒`
+  }
+  return val
+}
+
+// =============================================================================
 // 导出 Excel
 // =============================================================================
 
 function exportExcel() {
   if (!result.videos.length) { ElMessage.warning('没有可导出的数据'); return }
-  const rows = result.videos.map(v => ({
-    'UP主昵称': v.creator_nickname,
-    'UP主MID': v.creator_mid,
-    'BV号': v.bvid,
-    '标题': v.title,
-    '发布时间': formatDate(v.pubdate),
-    '描述': v.description,
-    '动态': v.dynamic,
-    '时长(秒)': v.duration,
-    '播放量': v.stat?.view || 0,
-    '点赞': v.stat?.like || 0,
-    '投币': v.stat?.coin || 0,
-    '收藏': v.stat?.favorite || 0,
-    '分享': v.stat?.share || 0,
-    '评论': v.stat?.reply || 0,
-    '弹幕': v.stat?.danmaku || 0,
-    '标签': (v.tags || []).join('、'),
-    '话题': (v.participle || []).join('、'),
-    '链接': v.url,
-  }))
+  const rows = result.videos.map(v => {
+    const row = {}
+    exportColumns.value.forEach(col => {
+      row[col.label] = formatCellValue(v, col.key)
+    })
+    return row
+  })
   const ws = XLSX.utils.json_to_sheet(rows)
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, '抓取结果')
@@ -514,7 +624,7 @@ onMounted(async () => {
     // 任务仍在运行中 → 直接重建 SSE 接收实时进度
     loading.value = true
     ElMessage.info('检测到正在进行的任务，已恢复 SSE 连接')
-    connectSSE(savedTaskId)
+    connectResumeSSE(savedTaskId)
   } catch (e) {
     console.warn('恢复任务失败:', e)
     sessionStorage.removeItem('current_task_id')
@@ -617,16 +727,29 @@ onUnmounted(() => {
           <div v-if="llmPlan.reasoning" class="plan-reasoning">
             <strong>推理：</strong>{{ llmPlan.reasoning }}
           </div>
-          <div v-if="llmPlan.filters" class="plan-filters">
-            <el-tag type="primary">话题: {{ llmPlan.filters.topic || '无' }}</el-tag>
-            <el-tag type="info">日期: {{ llmPlan.filters.start_date || '无' }}</el-tag>
+          <div v-if="llmPlan.global_filter" class="plan-filters">
+            <el-tag type="primary">话题: {{ llmPlan.global_filter.topic || '无' }}</el-tag>
+            <el-tag type="info">开始: {{ llmPlan.global_filter.start_date || '无' }}</el-tag>
+            <el-tag type="info">结束: {{ llmPlan.global_filter.end_date || '无' }}</el-tag>
           </div>
-          <el-timeline v-if="llmPlan.tool_calls">
-            <el-timeline-item v-for="(tc, idx) in llmPlan.tool_calls" :key="idx">
-              <strong>{{ tc.tool }}</strong>
-              <p style="margin: 4px 0 0; color: #666; font-size: 13px;">{{ tc.purpose }}</p>
-            </el-timeline-item>
-          </el-timeline>
+          <div v-if="llmPlan.workflow" style="margin-top: 12px;">
+            <div style="font-weight: 600; margin-bottom: 8px;">工作流</div>
+            <el-timeline v-if="workflowSteps.length">
+              <el-timeline-item
+                v-for="(step, idx) in workflowSteps"
+                :key="idx"
+                :type="step.is_detail ? 'warning' : ''"
+                :icon="step.is_detail ? 'CollectionTag' : ''"
+              >
+                <strong>{{ step.tool_name }}</strong>
+                <el-tag v-if="step.is_detail" size="small" type="warning" style="margin-left: 8px;">逐条</el-tag>
+                <p style="margin: 4px 0 0; color: #666; font-size: 13px;">{{ step.reason }}</p>
+              </el-timeline-item>
+            </el-timeline>
+            <div v-if="llmPlan.workflow.page_rule && llmPlan.workflow.page_rule.enable_page" style="font-size: 12px; color: #909399; margin-top: 8px;">
+              分页采集：最多 {{ llmPlan.workflow.page_rule.max_page }} 页，每页 {{ llmPlan.workflow.page_rule.page_size }} 条
+            </div>
+          </div>
         </el-card>
 
         <!-- 每个达人的处理结果 -->
@@ -673,31 +796,32 @@ onUnmounted(() => {
               <el-button type="primary" size="small" @click="exportExcel">导出 Excel</el-button>
             </div>
           </template>
-          <el-table :data="result.videos" stripe border height="500" style="width: 100%;">
+          <el-table :data="result.videos" stripe border height="500" style="width: 100%;" v-if="exportColumns.length">
             <el-table-column type="index" width="50" />
-            <el-table-column prop="creator_nickname" label="UP主" width="120" />
-            <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
-            <el-table-column label="发布时间" width="160">
-              <template #default="{ row }">{{ formatDate(row.pubdate) }}</template>
-            </el-table-column>
-            <el-table-column label="播放量" width="100" align="right">
-              <template #default="{ row }">{{ (row.stat?.view || 0).toLocaleString() }}</template>
-            </el-table-column>
-            <el-table-column label="点赞" width="90" align="right">
-              <template #default="{ row }">{{ (row.stat?.like || 0).toLocaleString() }}</template>
-            </el-table-column>
-            <el-table-column label="标签" min-width="150" show-overflow-tooltip>
+            <el-table-column
+              v-for="col in exportColumns"
+              :key="col.key"
+              :prop="col.key"
+              :label="col.label"
+              :width="col.width"
+              :min-width="col.minWidth"
+              :align="col.align || 'left'"
+              show-overflow-tooltip
+            >
               <template #default="{ row }">
-                <el-tag v-for="tag in (row.tags || []).slice(0, 3)" :key="tag" size="small"
-                  style="margin-right: 4px;">{{ tag }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="链接" width="80">
-              <template #default="{ row }">
-                <el-link :href="row.url" target="_blank" type="primary">查看</el-link>
+                <span v-if="col.key === 'url'">
+                  <el-link :href="row.url" target="_blank" type="primary">查看</el-link>
+                </span>
+                <span v-else-if="col.key === 'tags' && Array.isArray(row.tags)">
+                  <el-tag v-for="tag in row.tags.slice(0, 3)" :key="tag.tag_name || tag" size="small" style="margin-right: 4px;">
+                    {{ tag.tag_name || tag }}
+                  </el-tag>
+                </span>
+                <span v-else>{{ formatCellValue(row, col.key) }}</span>
               </template>
             </el-table-column>
           </el-table>
+          <el-empty v-else description="暂无数据字段可展示" />
         </el-card>
 
         <!-- 空状态 -->

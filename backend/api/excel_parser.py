@@ -23,66 +23,131 @@ URL_KEYWORDS = {
 MID_KEYWORDS = {
     "mid", "uid", "id", "账号id", "用户id", "up主id", "创作者id", "up号", "编号"
 }
+BVID_KEYWORDS = {
+    "bvid", "bv号", "bv", "视频号", "视频id", "视频编号", "作品号"
+}
 
 # ====================== 工具函数：智能提取mid ======================
 def extract_mid_from_bilibili_url(url: str) -> int | None:
     """
-    智能提取 B站 mid
-    支持：主页链接、视频链接、短链接、任意格式
-    例：
-    https://space.bilibili.com/123456
-    https://www.bilibili.com/video/BV1xx411c7mZ
-    https://b23.tv/BV1xx
+    智能提取 B站 mid（兼容旧版，仅支持主页链接）
+    如需完整类型识别，请使用 classify_bilibili_url()
     """
     if not url or not isinstance(url, str):
         return None
-
     url = url.strip()
-
-    # 1. 匹配 space 主页链接
     match_space = re.search(r"space\.bilibili\.com/(\d+)", url)
     if match_space:
         return int(match_space.group(1))
-
-    # 2. 匹配视频链接中的 mid（如果你的工具支持，这里可以调用API；不支持就注释）
-    # 如果你只需要从主页链接提取，保留上面1即可
-
     return None
+
+
+# ====================== 【核心】链接类型识别 ======================
+def classify_bilibili_url(url: str) -> dict:
+    """
+    智能识别 B 站链接类型，返回结构化信息
+
+    Returns:
+        {
+            "type": "space" | "video" | "short" | "unknown",
+            "mid": int | None,          # space 类型时有值
+            "bvid": str | None,         # video 类型时有值（BV号）
+            "avid": int | None,         # video 类型时有值（av号）
+            "short_code": str | None,   # short 类型时有值
+            "raw_url": str,
+        }
+    """
+    if not url or not isinstance(url, str):
+        return {"type": "unknown", "mid": None, "bvid": None, "avid": None, "short_code": None, "raw_url": url or ""}
+
+    raw_url = url.strip()
+    url_lower = raw_url.lower()
+
+    # 1. 主页链接
+    space_match = re.search(r"space\.bilibili\.com/(\d+)", url_lower)
+    if space_match:
+        return {
+            "type": "space",
+            "mid": int(space_match.group(1)),
+            "bvid": None,
+            "avid": None,
+            "short_code": None,
+            "raw_url": raw_url,
+        }
+
+    # 2. 视频链接 (BV号)
+    # ⚠️ BV 号是 base58 编码，大小写敏感！必须从原始 URL 提取，不能转大小写
+    video_bv_match = re.search(r"bilibili\.com/video/(BV\w+)", raw_url, re.IGNORECASE)
+    if video_bv_match:
+        return {
+            "type": "video",
+            "mid": None,
+            "bvid": video_bv_match.group(1),  # 保留原始大小写
+            "avid": None,
+            "short_code": None,
+            "raw_url": raw_url,
+        }
+
+    # 3. 视频链接 (av号)
+    video_av_match = re.search(r"bilibili\.com/video/av(\d+)", url_lower)
+    if video_av_match:
+        return {
+            "type": "video",
+            "mid": None,
+            "bvid": None,
+            "avid": int(video_av_match.group(1)),
+            "short_code": None,
+            "raw_url": raw_url,
+        }
+
+    # 4. 短链接（从原始 URL 提取，保留大小写）
+    short_match = re.search(r"b23\.tv/(\w+)", raw_url, re.IGNORECASE)
+    if short_match:
+        return {
+            "type": "short",
+            "mid": None,
+            "bvid": None,
+            "avid": None,
+            "short_code": short_match.group(1),
+            "raw_url": raw_url,
+        }
+
+    return {"type": "unknown", "mid": None, "bvid": None, "avid": None, "short_code": None, "raw_url": raw_url}
 
 # ====================== 【核心】智能查找列：模糊匹配 ======================
 def smart_find_column(columns: pd.Index, target_keywords: set[str]) -> str | None:
     """
     智能匹配列名：
     只要列名 包含 任意一个关键词（不区分大小写、不区分顺序）
-    就返回该列
+    就返回该列的**原始列名**（保留大小写）
     """
-    columns = [str(col).lower().strip() for col in columns if pd.notna(col)]
-
-    for col in columns:
+    for raw_col in columns:
+        if pd.isna(raw_col):
+            continue
+        col_lower = str(raw_col).lower().strip()
         for kw in target_keywords:
-            kw = kw.lower()
-            if kw in col:  # 模糊包含：最通用
-                return col
+            if kw.lower() in col_lower:
+                return str(raw_col)
     return None
 
 # ====================== 查找表头行（智能版）======================
 def _find_header_row(df: pd.DataFrame) -> int | None:
     """
     智能找表头：
-    只要一行里 同时出现 昵称类 + 链接类 关键词，就判定为表头
-    适配任何表格
+    只要一行里出现昵称类、链接类或 mid 类任意关键词，就判定为表头。
+    适配单列表格（如只有视频URL列）。
     """
     for idx, row in df.iterrows():
         if idx > 50:
             break
         row_str = " ".join(str(c) for c in row if pd.notna(c)).lower()
 
-        # 判定规则：只要命中 昵称/名字 + 链接/主页 任意一个 → 就是表头
         has_nick = any(kw in row_str for kw in NICKNAME_KEYWORDS)
         has_url = any(kw in row_str for kw in URL_KEYWORDS)
         has_mid = any(kw in row_str for kw in MID_KEYWORDS)
 
-        if (has_nick and has_url) or (has_nick and has_mid) or (has_url and has_mid):
+        # 放宽：只要有任意一类关键词就认为是表头（支持只有URL列的表格）
+        if has_nick or has_url or has_mid:
             return idx
     return None
 
@@ -111,12 +176,13 @@ def parse_excel(file_bytes: bytes) -> dict[str, Any]:
 
     logger.info(f"[智能匹配] 最终列名: {list(df.columns)}")
 
-    # ====================== 【核心】智能匹配三列 ======================
+    # ====================== 【核心】智能匹配四列 ======================
     nickname_col = smart_find_column(df.columns, NICKNAME_KEYWORDS)
     url_col = smart_find_column(df.columns, URL_KEYWORDS)
     mid_col = smart_find_column(df.columns, MID_KEYWORDS)
+    bvid_col = smart_find_column(df.columns, BVID_KEYWORDS)
 
-    logger.info(f"[智能匹配结果] 昵称={nickname_col} | 链接={url_col} | mid={mid_col}")
+    logger.info(f"[智能匹配结果] 昵称={nickname_col} | 链接={url_col} | mid={mid_col} | bvid={bvid_col}")
 
     creators = []
     skipped = 0
@@ -125,6 +191,9 @@ def parse_excel(file_bytes: bytes) -> dict[str, Any]:
         nickname = str(row[nickname_col]).strip() if (nickname_col and pd.notna(row[nickname_col])) else None
         upper_mid = None
         space_url = None
+        link_info = {"type": "unknown"}
+        bvid = None
+        avid = None
 
         # 1. 优先取 mid
         if mid_col and pd.notna(row[mid_col]):
@@ -134,19 +203,75 @@ def parse_excel(file_bytes: bytes) -> dict[str, Any]:
                 pass
 
         # 2. 从链接提取
-        if upper_mid is None and url_col and pd.notna(row[url_col]):
+        if url_col and pd.notna(row[url_col]):
             space_url = str(row[url_col]).strip()
-            upper_mid = extract_mid_from_bilibili_url(space_url)
+            link_info = classify_bilibili_url(space_url)
+            if link_info["type"] == "space":
+                upper_mid = link_info["mid"]
+            bvid = link_info.get("bvid")
+            avid = link_info.get("avid")
 
-        if upper_mid is None:
+        # 3. 独立的 bvid 列（优先级高于链接中提取的，因为用户可能专门填了 BV号）
+        if bvid_col and pd.notna(row[bvid_col]):
+            raw_bvid = str(row[bvid_col]).strip()
+            # 规范化：确保是 BV 开头
+            if raw_bvid.upper().startswith("BV"):
+                bvid = raw_bvid
+            elif re.match(r"^\w{10,12}$", raw_bvid):
+                # 可能是纯 BV 号部分（如 1HF9PB7Et7），补上前缀
+                bvid = f"BV{raw_bvid}"
+
+        # 判断是否有可识别的身份（mid / bvid / avid / video / short）
+        has_identity = (
+            upper_mid is not None
+            or bvid is not None
+            or avid is not None
+            or link_info["type"] == "video"
+            or link_info["type"] == "short"
+        )
+
+        if not has_identity:
             skipped += 1
             continue
 
         creators.append({
-            "nickname": nickname if nickname else f"UP_{upper_mid}",
+            "nickname": nickname if nickname else f"UP_{upper_mid or bvid or link_info.get('short_code') or 'unknown'}",
             "upper_mid": upper_mid,
+            "link_type": link_info["type"] if (link_info["type"] != "unknown" or space_url) else ("video" if bvid else "unknown"),
+            "bvid": bvid,
+            "avid": avid,
+            "short_code": link_info.get("short_code"),
             "space_url": space_url,
         })
+
+    if not creators:
+        # 分析为什么解析失败，给出具体提示
+        detected = []
+        if nickname_col:
+            detected.append("昵称列")
+        if url_col:
+            detected.append("链接列")
+        if mid_col:
+            detected.append("MID列")
+        if bvid_col:
+            detected.append("BV号列")
+
+        if detected:
+            hint = f"检测到了 {', '.join(detected)}，但未能从中提取出有效的 bvid、aid 或 mid。"
+        else:
+            hint = (
+                "未能识别到任何相关列（昵称/链接/MID/BV号）。"
+                "请确保表格中至少包含以下一种信息："
+                "UP主ID（mid）、视频BV号（bvid/BV号）、视频AV号（avid）、"
+                "B站主页链接（space.bilibili.com）、视频链接（bilibili.com/video）或短链接（b23.tv）。"
+            )
+
+        return {
+            "error": (
+                f"Excel 中未能识别出任何可作为工具输入的数据。{hint}"
+                "请检查表格内容后重新上传。"
+            )
+        }
 
     return {
         "total": len(creators),

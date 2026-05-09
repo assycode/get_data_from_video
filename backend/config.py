@@ -65,7 +65,7 @@ class Settings:
 
     # --- Agent 行为 ---
     MAX_TOOL_ITERATIONS: int = int(_getenv("MAX_TOOL_ITERATIONS", "20"))
-    MAX_TOOL_RESULT_LENGTH: int = int(_getenv("MAX_TOOL_RESULT_LENGTH", "8000"))
+    MAX_TOOL_RESULT_LENGTH: int = int(_getenv("MAX_TOOL_RESULT_LENGTH", "200000"))
     # 批量任务并发数（同时调用的UP主数量）
     BATCH_CONCURRENCY: int = int(_getenv("BATCH_CONCURRENCY", "3"))
     # 单UP主翻页最大页数（防止无限翻页）

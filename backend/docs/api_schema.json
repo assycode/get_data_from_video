@@ -133,6 +133,29 @@
           {"name": "Card", "type": "object", "description": "UP主卡片信息"}
         ]
       }
+    },
+    {
+      "name": "resolve_short_url",
+      "description": "解析B站短链接(b23.tv/xxxx)为真实URL，从中提取bvid/avid/mid等可用参数。适用场景：输入是短链接时，必须先调用此工具获取真实视频ID，才能继续调get_video_data/get_video_detail/get_video_list。",
+      "endpoint": "(内部HTTP解析)",
+      "method": "HEAD",
+      "parameters": [
+        {
+          "name": "short_code",
+          "type": "string",
+          "required": true,
+          "description": "短链接代码，如 b23.tv/xxxx 中的 xxxx 部分"
+        }
+      ],
+      "returns": {
+        "description": "解析结果",
+        "fields": [
+          {"name": "bvid", "type": "string", "description": "解析出的BV号"},
+          {"name": "avid", "type": "int", "description": "解析出的AV号"},
+          {"name": "mid", "type": "int", "description": "解析出的UP主MID"},
+          {"name": "resolved_url", "type": "string", "description": "跳转后的真实URL"}
+        ]
+      }
     }
   ]
 }
