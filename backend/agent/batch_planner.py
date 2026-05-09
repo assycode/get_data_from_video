@@ -133,18 +133,23 @@ async def _continue_in_background(
     pending_tasks = [t for t in tasks if not t.done()]
     logger.info(f"[Background] 剩余未完成 task 数: {len(pending_tasks)}/{total}")
 
-    if not pending_tasks:
-        status = "cancelled" if cancel_event.is_set() else "completed"
+    # 关键修复：无论哪种退出路径，都必须触发 TTL 清理，防止 task_cache / task_locks 永久残留
+    def _finish(status: str) -> None:
         if task_id in task_cancel_events:
             del task_cancel_events[task_id]
-        await _update_task_cache(
+        asyncio.create_task(_update_task_cache(
             task_id,
             status=status,
             completed=completed,
             matched_so_far=len(all_matched_videos),
             videos=all_matched_videos,
-        )
-        logger.info(f"[Background] 任务 {task_id} 所有 task 已完成，状态={status}")
+        ))
+        _schedule_task_cleanup(task_id)
+        logger.info(f"[Background] 任务 {task_id} 后台完成，状态={status}，共匹配 {len(all_matched_videos)} 条")
+
+    if not pending_tasks:
+        status = "cancelled" if cancel_event.is_set() else "completed"
+        _finish(status)
         return
 
     try:
@@ -154,7 +159,7 @@ async def _continue_in_background(
                 for t in pending_tasks:
                     t.cancel()
                 await asyncio.gather(*pending_tasks, return_exceptions=True)
-                await _update_task_cache(task_id, status="cancelled")
+                _finish("cancelled")
                 return
             try:
                 matched = await coro
@@ -174,21 +179,11 @@ async def _continue_in_background(
             logger.info(f"[Background] 进度: {completed}/{total}, 累计匹配: {len(all_matched_videos)}")
     except Exception as exc:
         logger.error(f"[Background] 后台任务异常: {exc}")
-        await _update_task_cache(task_id, status="error")
+        _finish("error")
         return
 
-    if task_id in task_cancel_events:
-        del task_cancel_events[task_id]
-
     status = "cancelled" if cancel_event.is_set() else "completed"
-    await _update_task_cache(
-        task_id,
-        status=status,
-        completed=completed,
-        matched_so_far=len(all_matched_videos),
-        videos=all_matched_videos,
-    )
-    logger.info(f"[Background] 任务 {task_id} 后台完成，状态={status}，共匹配 {len(all_matched_videos)} 条")
+    _finish(status)
 
 
 # ------------------------------------------------------------------------------
@@ -1001,6 +996,7 @@ async def run_batch_task(
     cancel_watcher = asyncio.create_task(_watch_cancel(task_id, cancel_event, tasks))
 
     completed = 0
+    background_continued = False
     try:
         for coro in asyncio.as_completed(tasks):
             matched = await coro
@@ -1030,6 +1026,7 @@ async def run_batch_task(
             if task_id:
                 await _update_task_cache(task_id, status="cancelled")
         else:
+            background_continued = True
             asyncio.ensure_future(_continue_in_background(
                 tasks, task_id, all_matched_videos, completed, cancel_event, len(creators)
             ))
@@ -1041,11 +1038,14 @@ async def run_batch_task(
             await cancel_watcher
         except asyncio.CancelledError:
             pass
-        pending = [t for t in tasks if not t.done()]
-        if pending:
-            for t in pending:
-                t.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+        # 只有在不是转移到后台继续的情况下，才在这里取消 pending tasks
+        # 否则 _continue_in_background 会自己管理这些 tasks
+        if not background_continued:
+            pending = [t for t in tasks if not t.done()]
+            if pending:
+                for t in pending:
+                    t.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
 
     if task_id:
         _cleanup_cancel_event(task_id)

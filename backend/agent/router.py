@@ -32,6 +32,17 @@ from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api", tags=["Agent"])
 
+# 保存后台任务的强引用，防止被垃圾回收（Python 3.8+ 虽自动持有，但显式管理更稳妥）
+# 任务完成后会自动从集合中移除
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _register_background_task(task: asyncio.Task) -> None:
+    """注册后台任务并设置完成后自动清理的回调。"""
+    _background_tasks.add(task)
+    task.add_done_callback(lambda t: _background_tasks.discard(t))
+
+
 
 
 
@@ -227,7 +238,7 @@ async def start_task(
         async for _ in run_batch_task(question, creators, plan, task_id=task_id):
             pass  # generator 已自动更新 task_cache，无需额外处理
 
-    asyncio.create_task(_consume())
+    _register_background_task(asyncio.create_task(_consume()))
     logger.info(f"[Router][start-task] 任务 {task_id} 已启动，共 {len(creators)} 个达人")
 
     return {"code": 0, "message": "任务已创建", "task_id": task_id, "total_creators": len(creators)}
