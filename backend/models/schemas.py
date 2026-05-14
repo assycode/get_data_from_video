@@ -170,7 +170,7 @@ class EachDetailRule(BaseModel):
 
 
 class Workflow(BaseModel):
-    """LLM 编排的单一工作流定义。所有 creator 都执行同一套 workflow。"""
+    """LLM 编排的单一平台工作流定义。"""
 
     tool_sequence: list[ToolStep] = Field(default_factory=list, description="工具调用顺序列表")
     page_rule: PageRule = Field(default_factory=PageRule, description="分页规则（仅对最后一步返回列表的工具生效）")
@@ -178,11 +178,19 @@ class Workflow(BaseModel):
 
 
 class LLMWorkflowPlan(BaseModel):
-    """LLM 一次性输出的完整工作流规划。"""
+    """LLM 一次性输出的完整工作流规划（支持多平台）。
+
+    workflows 的 key 是平台标识（如 bilibili / douyin / xiaohongshu），
+    value 是该平台对应的工作流定义。
+    后端会根据每个 creator 的 platform 字段自动匹配对应的工作流执行。
+    """
 
     global_filter: GlobalFilter = Field(default_factory=GlobalFilter, description="全局过滤条件")
     export_fields: list[str] = Field(default_factory=list, description="最终需要导出的字段列表")
-    workflow: Workflow = Field(default_factory=Workflow, description="工作流定义，所有 creator 统一执行")
+    workflows: dict[str, Workflow] = Field(
+        default_factory=dict,
+        description="按平台分组的工作流字典。key=平台名(bilibili/douyin/xiaohongshu)，value=Workflow",
+    )
     reasoning: str = Field(default="", description="LLM 的推理过程，用中文简述")
 
 

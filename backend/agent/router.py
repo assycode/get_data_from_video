@@ -166,7 +166,7 @@ async def plan_task(request: PlanTaskRequest):
         logger.error(f"[Router] LLM 选型失败: {exc}")
         raise HTTPException(status_code=500, detail=f"LLM 接口选型失败: {exc}")
 
-    return {"code": 0, "message": "success", "plan": plan}
+    return {"code": 0, "message": "success", "data": plan}
 
 
 @router.post("/start-task")
@@ -206,12 +206,18 @@ async def start_task(
 
     # 生成 plan（优先用前端传入的 plan_json）
     plan = None
+    logger.info(f"[Router][start-task] 收到的 plan_json 类型: {type(plan_json)}, 内容前100字符: {str(plan_json)[:100] if plan_json else 'None'}")
     if plan_json:
         try:
-            plan = json.loads(plan_json)
-            logger.info(f"[Router][start-task] 使用前端传入的 plan_json，task_id={task_id}")
+            # 处理可能的 'undefined' 或 'null' 字符串
+            if plan_json.strip().lower() in ('undefined', 'null', ''):
+                logger.warning(f"[Router][start-task] plan_json 是特殊值: '{plan_json}'，将使用 LLM 重新生成")
+                plan_json = None
+            else:
+                plan = json.loads(plan_json)
+                logger.info(f"[Router][start-task] 使用前端传入的 plan_json，task_id={task_id}")
         except json.JSONDecodeError as exc:
-            logger.error(f"[Router][start-task] plan_json 解析失败: {exc}")
+            logger.error(f"[Router][start-task] plan_json 解析失败: {exc}, 内容: {plan_json[:200] if plan_json else 'None'}")
             raise HTTPException(status_code=422, detail=f"plan_json 格式错误: {exc}")
     else:
         tools = build_openai_functions()
@@ -241,7 +247,7 @@ async def start_task(
     _register_background_task(asyncio.create_task(_consume()))
     logger.info(f"[Router][start-task] 任务 {task_id} 已启动，共 {len(creators)} 个达人")
 
-    return {"code": 0, "message": "任务已创建", "task_id": task_id, "total_creators": len(creators)}
+    return {"code": 0, "message": "任务已创建", "data": {"task_id": task_id, "total_creators": len(creators)}}
 
 
 @router.get("/task-progress/{task_id}")
@@ -323,7 +329,7 @@ async def cancel_task_endpoint(task_id: str = Form(...)):
     found = cancel_task(task_id)
     if not found:
         raise HTTPException(status_code=404, detail="任务不存在或已结束")
-    return {"code": 0, "message": "任务已取消"}
+    return {"code": 0, "message": "任务已取消", "data": None}
 
 
 @router.get("/task-status")
@@ -332,7 +338,7 @@ async def task_status(task_id: str):
     cache = get_task_status(task_id)
     if cache is None:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
-    return {"code": 0, "data": cache}
+    return {"code": 0, "message": "success", "data": cache}
 
 
 @router.post("/resume-task")
