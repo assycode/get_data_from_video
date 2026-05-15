@@ -88,7 +88,7 @@ class Settings:
     "start_date": "开始日期 YYYY-MM-DD，没有就留空",
     "end_date": "结束日期 YYYY-MM-DD，没有就留空"
   }},
-  "export_fields": ["字段1", "字段2", ...],
+  "export_fields": ["字段1", "字段2"],
   "workflows": {{
     "bilibili": {{
       "tool_sequence": [
@@ -101,9 +101,31 @@ class Settings:
       "tool_sequence": [...],
       "page_rule": {{...}},
       "each_detail": {{...}}
+    }},
+    "xiaohongshu": {{
+      "tool_sequence": [...],
+      "page_rule": {{...}},
+      "each_detail": {{...}}
     }}
   }},
   "reasoning": "你的思考过程，用中文简述"
+}}
+
+## 工作流编排示例（小红书场景）
+如果 Excel 中只有小红书达人（含 user_id 字段）：
+{{
+  "global_filter": {{"topic": "", "start_date": "", "end_date": ""}},
+  "export_fields": ["note_id", "title", "date", "readNum", "likeNum", "collectNum", "shareNum", "nickname", "user_id"],
+  "workflows": {{
+    "xiaohongshu": {{
+      "tool_sequence": [
+        {{"tool_name": "get_xhs_notes_list", "reason": "获取小红书用户笔记列表"}}
+      ],
+      "page_rule": {{"enable_page": true, "max_page": 10, "page_size": 20}},
+      "each_detail": {{"need_query": false, "tool_name": "get_xhs_note_info"}}
+    }}
+  }},
+  "reasoning": "Excel中只有小红书达人，只需要编排xiaohongshu工作流，使用get_xhs_notes_list获取笔记列表"
 }}
 
 ## 工作流编排指南（必须遵守）
@@ -128,18 +150,31 @@ class Settings:
 6. page_rule 仅对 tool_sequence 最后一步返回列表的工具有效：
    - enable_page=true 时，后端会自动翻页采集。
 7. each_detail 用于列表采完后是否逐条查详情：
-   - **重要：如果用户需要按话题/标签筛选视频，each_detail.need_query 必须设为 true，且 tool_name 设为对应平台的详情工具（如 get_video_detail / get_douyin_video_detail）**
-   - 因为 get_video_list 返回的视频列表不包含完整标签信息，必须通过 each_detail 逐条调用详情接口才能获取 Tags/话题
+   - **重要：如果用户需要按话题/标签筛选视频，each_detail.need_query 必须设为 true，且 tool_name 设为对应平台的详情工具：**
+     - B站: get_video_detail
+     - 抖音: get_douyin_video_detail  
+     - 小红书: get_xhs_note_info
+   - 因为 get_video_list / get_xhs_notes_list 返回的列表不包含完整标签信息，必须通过 each_detail 逐条调用详情接口才能获取 Tags/话题
    - 如果只需要基础数据且无需话题过滤，need_query=false
-8. topic/start_date/end_date 必须从用户需求中提取。没有提到就留空字符串（""），严禁臆测。
-9. **export_fields 必须完整**：
+8. **小红书(xiaohongshu)平台专用工具**：
+   - get_xhs_notes_list: 获取用户笔记列表（类似B站的 get_video_list）
+   - get_xhs_note_info: 获取单条笔记详情（类似B站的 get_video_detail）
+   - 如果 Excel 中有 xiaohongshu 平台的达人，必须在 workflows 中编排 xiaohongshu 的工作流，使用上述小红书专用工具
+9. **快手(kuaishou)平台专用工具**：
+   - get_ks_video_list: 获取用户视频列表（类似B站的 get_video_list）
+   - get_ks_video_detail: 获取单条视频详情
+   - 如果 Excel 中有 kuaishou 平台的达人，必须在 workflows 中编排 kuaishou 的工作流，使用上述快手专用工具
+10. topic/start_date/end_date 必须从用户需求中提取。没有提到就留空字符串（""），严禁臆测。
+11. **export_fields 必须完整**：
    - 跨平台场景下，export_fields 可以包含多个平台的字段名（如同时有 bvid 和 aweme_id），
      后端会自动从每个平台的数据中提取对应字段，缺失的留空。
    - **绝对禁止**只返回标识字段（如 ["bvid","mid"] 或 ["aweme_id","sec_uid"]）。
    - 强制模板：只要用户提到'视频'、'数据'、'统计'等词，export_fields 必须至少包含内容+统计字段。
    - B站常用字段：bvid, title, pubdate, duration, view, like, reply, favorite, coin, share, danmaku, creator_nickname, creator_mid, url
    - 抖音常用字段：aweme_id, desc, create_time, duration, play_count, digg_count, comment_count, share_count, nickname, author_uid, url, text_extra
-10. 只输出 JSON，不要任何 markdown 代码块标记，不要任何解释性文字。'''
+   - 小红书常用字段：note_id, title, date, isVideo, readNum, likeNum, collectNum, shareNum, nickname, user_id, imgUrl
+   - 快手常用字段：photo_id, caption, timestamp, view_count, like_count, comment_count, share_count, nickname, uid, url
+12. 只输出 JSON，不要任何 markdown 代码块标记，不要任何解释性文字。'''
     )
 
     # --- 数据 API（观星接口）---

@@ -22,13 +22,14 @@ logger = logging.getLogger(__name__)
 
 
 def _dedup_video_list(video_list: list[dict]) -> list[dict]:
-    """按 bvid 或 aweme_id 去重（支持多平台）。"""
+    """按 bvid / aweme_id / note_id 去重（支持多平台）。"""
     seen: set[str] = set()
     deduped: list[dict] = []
     for v in video_list:
         if not isinstance(v, dict):
             continue
-        key = v.get("bvid") or v.get("aweme_id")
+        # 支持 B站(bvid)、抖音(aweme_id)、小红书(note_id/noteId)、快手(photo_id/photoId)
+        key = v.get("bvid") or v.get("aweme_id") or v.get("note_id") or v.get("noteId") or v.get("photo_id") or v.get("photoId")
         if key and key not in seen:
             seen.add(key)
             deduped.append(v)
@@ -76,6 +77,8 @@ def _apply_global_filter(video_list: list[dict], global_filter: GlobalFilter) ->
             title = str(v.get("title", ""))
             desc = str(v.get("desc", "")) if v.get("desc") else str(v.get("description", ""))
             dynamic = str(v.get("dynamic", ""))
+            # 快手 caption（标题/描述）
+            caption = str(v.get("caption", ""))
             tags = v.get("tags", [])
             tags_text = " ".join(str(t.get("tag_name", t)) if isinstance(t, dict) else str(t) for t in tags)
             participle = v.get("participle", [])
@@ -86,7 +89,13 @@ def _apply_global_filter(video_list: list[dict], global_filter: GlobalFilter) ->
                 str(t.get("hashtag_name", t)) if isinstance(t, dict) else str(t)
                 for t in text_extra
             )
-            combined = f"{title} {desc} {dynamic} {tags_text} {participle_text} {text_extra_text}"
+            # 小红书 contentTags（话题标签）
+            content_tags = v.get("contentTags", [])
+            content_tags_text = " ".join(
+                f"{t.get('taxonomy1Tag', '')} {' '.join(t.get('taxonomy2Tags', []))}" if isinstance(t, dict) else str(t)
+                for t in content_tags
+            )
+            combined = f"{title} {desc} {dynamic} {caption} {tags_text} {participle_text} {text_extra_text} {content_tags_text}"
             if topic.lower() not in combined.lower():
                 continue
 
@@ -174,6 +183,9 @@ def _build_export_record(
         # 4. 特殊字段映射
         if field == "description":
             return item.get("desc") or param_pool.get("desc")
+        if field == "note_id":
+            # 小红书 noteId 驼峰命名兼容
+            return item.get("note_id") or item.get("noteId") or param_pool.get("note_id")
         if field == "creator_nickname":
             return (
                 nickname
@@ -190,6 +202,7 @@ def _build_export_record(
                 or param_pool.get("upper_mid")
                 or param_pool.get("owner_mid")
                 or param_pool.get("author_uid")
+                or param_pool.get("user_id")  # 小红书 user_id 作为 creator_mid
             )
         if field == "url":
             # B站
@@ -251,6 +264,18 @@ def _build_export_record(
             if isinstance(text_extra, list):
                 return text_extra
 
+        # 6d. 小红书 contentTags（话题标签）
+        if field == "contentTags":
+            content_tags = item.get("contentTags") or param_pool.get("contentTags")
+            if isinstance(content_tags, list):
+                return content_tags
+
+        # 6e. 小红书统计字段
+        if field in ("like_num", "fav_num", "cmt_num", "read_num", "share_num", "follow_cnt"):
+            val = item.get(field) or param_pool.get(field)
+            if val is not None:
+                return val
+
         # 7. get_video_detail 返回的 Card 对象中的字段（B站）
         card = item.get("card") or param_pool.get("card")
         if isinstance(card, dict) and field in card:
@@ -276,6 +301,11 @@ def _build_export_record(
                 aweme_id = item.get("aweme_id") or param_pool.get("aweme_id")
                 if aweme_id:
                     record["url"] = f"https://www.douyin.com/video/{aweme_id}"
+                else:
+                    # 小红书笔记链接
+                    note_id = item.get("note_id") or param_pool.get("note_id")
+                    if note_id:
+                        record["url"] = f"https://www.xiaohongshu.com/explore/{note_id}"
     if "creator_nickname" not in record:
         record["creator_nickname"] = (
             nickname

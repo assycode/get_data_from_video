@@ -48,8 +48,63 @@ export const DOUYIN_COLUMN_MAP: Record<string, ColumnConfig> = {
   text_extra: { label: '话题标签', minWidth: 150 },
 }
 
+/** 小红书列配置 */
+export const XIAOHONGSHU_COLUMN_MAP: Record<string, ColumnConfig> = {
+  creator_nickname: { label: '达人昵称', width: 120 },
+  nickname: { label: '达人昵称', width: 120 },
+  title: { label: '标题', minWidth: 200 },
+  content: { label: '内容', minWidth: 200 },
+  date: { label: '发布时间', width: 120 },
+  isVideo: { label: '是否视频', width: 90 },
+  note_id: { label: '笔记ID', width: 160 },
+  noteId: { label: '笔记ID', width: 160 },
+  readNum: { label: '阅读量', width: 100, align: 'right' },
+  likeNum: { label: '点赞', width: 90, align: 'right' },
+  collectNum: { label: '收藏', width: 90, align: 'right' },
+  shareNum: { label: '分享', width: 90, align: 'right' },
+  cmtNum: { label: '评论', width: 90, align: 'right' },
+  imgUrl: { label: '封面图', width: 100 },
+  contentTags: { label: '话题标签', minWidth: 150 },
+  url: { label: '链接', width: 80 },
+  user_id: { label: '用户ID', width: 160 },
+  creator_mid: { label: '用户ID', width: 160 },
+}
+
+/** 快手列配置 */
+export const KUAISHOU_COLUMN_MAP: Record<string, ColumnConfig> = {
+  creator_nickname: { label: '达人昵称', width: 120 },
+  nickname: { label: '达人昵称', width: 120 },
+  caption: { label: '标题', minWidth: 200 },
+  title: { label: '标题', minWidth: 200 },
+  time: { label: '发布时间', width: 160 },
+  timestamp: { label: '时间戳', width: 120 },
+  photo_id: { label: '视频ID', width: 160 },
+  photoId: { label: '视频ID', width: 160 },
+  view_count: { label: '播放量', width: 100, align: 'right' },
+  like_count: { label: '点赞', width: 90, align: 'right' },
+  comment_count: { label: '评论', width: 90, align: 'right' },
+  share_count: { label: '分享', width: 90, align: 'right' },
+  forward_count: { label: '转发', width: 90, align: 'right' },
+  unlike_count: { label: '不喜欢', width: 90, align: 'right' },
+  duration: { label: '时长(毫秒)', width: 100 },
+  cover_urls: { label: '封面图', width: 100 },
+  imgUrl: { label: '封面图', width: 100 },
+  url: { label: '链接', width: 80 },
+  uid: { label: '用户ID', width: 160 },
+  user_id: { label: '用户ID', width: 160 },
+  creator_mid: { label: '用户ID', width: 160 },
+  kwaiId: { label: '快手号', width: 120 },
+  user_name: { label: '用户名', width: 120 },
+  headurl: { label: '头像', width: 100 },
+  fan: { label: '粉丝数', width: 100, align: 'right' },
+  photo: { label: '作品数', width: 100, align: 'right' },
+  follow: { label: '关注数', width: 100, align: 'right' },
+}
+
 /** 合并列配置（通用） */
 export const COLUMN_MAP: Record<string, ColumnConfig> = {
   ...BILIBILI_COLUMN_MAP,
   ...DOUYIN_COLUMN_MAP,
+  ...XIAOHONGSHU_COLUMN_MAP,
+  ...KUAISHOU_COLUMN_MAP,
 }

@@ -39,10 +39,20 @@ UID_KEYWORDS = {
 }
 XHS_USER_ID_KEYWORDS = {
     "user_id", "用户id", "小红书id", "xhs_user_id", "xhs_id", "小红书用户id", "小红书uid",
-    "xhs_uid", "xhs用户id", "red_id", "小红书账号id"
+    "xhs_uid", "xhs用户id", "red_id", "小红书账号id", "小红书达人uid", "小红书达人id",
+    "达人uid", "达人id"
 }
 XHS_NOTE_ID_KEYWORDS = {
     "note_id", "笔记id", "笔记编号", "小红书笔记id", "xhs_note_id"
+}
+
+# 快手列识别关键词
+KS_UID_KEYWORDS = {
+    "ks_uid", "快手uid", "快手id", "kuaishou_id", "kuaishou_uid", "快手用户id",
+    "快手达人uid", "快手达人id", "kwai_id", "ks_id"
+}
+KS_PHOTO_ID_KEYWORDS = {
+    "photo_id", "快手视频id", "kuaishou_video_id", "ks_video_id", "快手作品id"
 }
 
 # ====================== 工具函数：智能提取mid ======================
@@ -72,6 +82,8 @@ def detect_platform(url: str) -> str:
         return "douyin"
     if any(d in url_lower for d in ("xiaohongshu.com", "xhs.link", "xhs.cn")):
         return "xiaohongshu"
+    if any(d in url_lower for d in ("kuaishou.com", "kuaishou.cn", "chenzhongtech.com", "yximgs.com", "kwai.com", "kwaixiaodian.com")):
+        return "kuaishou"
     return "unknown"
 
 
@@ -159,12 +171,17 @@ def smart_find_column(columns: pd.Index, target_keywords: set[str]) -> str | Non
     智能匹配列名：
     只要列名 包含 任意一个关键词（不区分大小写、不区分顺序）
     就返回该列的**原始列名**（保留大小写）
+    
+    优化：优先匹配最长的关键词（更精确），解决"快手达人UID"同时匹配"达人uid"和"快手达人uid"的问题
     """
+    # 将关键词按长度降序排列，优先匹配更长的关键词
+    sorted_keywords = sorted(target_keywords, key=len, reverse=True)
+    
     for raw_col in columns:
         if pd.isna(raw_col):
             continue
         col_lower = str(raw_col).lower().strip()
-        for kw in target_keywords:
+        for kw in sorted_keywords:
             if kw.lower() in col_lower:
                 return str(raw_col)
     return None
@@ -225,11 +242,36 @@ def parse_excel(file_bytes: bytes) -> dict[str, Any]:
     uid_col = smart_find_column(df.columns, UID_KEYWORDS)
     xhs_user_id_col = smart_find_column(df.columns, XHS_USER_ID_KEYWORDS)
     xhs_note_id_col = smart_find_column(df.columns, XHS_NOTE_ID_KEYWORDS)
+    ks_uid_col = smart_find_column(df.columns, KS_UID_KEYWORDS)
+    ks_photo_id_col = smart_find_column(df.columns, KS_PHOTO_ID_KEYWORDS)
+
+    # 解决列冲突：如果 mid_col 和平台特定列是同一列，优先使用平台特定列
+    if mid_col and mid_col == xhs_user_id_col:
+        mid_col = None  # "小红书达人UID" 应识别为小红书列，不是通用mid列
+    if mid_col and mid_col == xhs_note_id_col:
+        mid_col = None
+    if mid_col and mid_col == ks_uid_col:
+        mid_col = None  # "快手UID" 应识别为快手列
+    if mid_col and mid_col == ks_photo_id_col:
+        mid_col = None
+    if mid_col and mid_col == sec_uid_col:
+        mid_col = None
+    if mid_col and mid_col == uid_col:
+        mid_col = None
+    if mid_col and mid_col == aweme_id_col:
+        mid_col = None
+
+    # 解决平台间列冲突：不同平台的列名可能重叠，优先使用更明确的平台列
+    # "快手达人UID" 同时匹配 "达人uid"(小红书) 和 "快手达人uid"(快手)，优先使用快手列
+    if xhs_user_id_col and xhs_user_id_col == ks_uid_col:
+        xhs_user_id_col = None  # 优先保留 ks_uid_col
+        mid_col = None
 
     logger.info(
         f"[智能匹配结果] 昵称={nickname_col} | 链接={url_col} | mid={mid_col} | bvid={bvid_col} | "
         f"aweme_id={aweme_id_col} | sec_uid={sec_uid_col} | uid={uid_col} | "
-        f"xhs_user_id={xhs_user_id_col} | xhs_note_id={xhs_note_id_col}"
+        f"xhs_user_id={xhs_user_id_col} | xhs_note_id={xhs_note_id_col} | "
+        f"ks_uid={ks_uid_col} | ks_photo_id={ks_photo_id_col}"
     )
 
     creators = []
@@ -247,6 +289,8 @@ def parse_excel(file_bytes: bytes) -> dict[str, Any]:
         uid = None
         user_id = None  # 小红书用户ID
         note_id = None  # 小红书笔记ID
+        ks_uid = None   # 快手用户ID
+        photo_id = None # 快手视频ID
 
         # 1. 优先取 mid（B站）
         if mid_col and pd.notna(row[mid_col]):
@@ -310,7 +354,18 @@ def parse_excel(file_bytes: bytes) -> dict[str, Any]:
             note_id = str(row[xhs_note_id_col]).strip()
             platform = "xiaohongshu"
 
-        # 9. 处理通用的 uid 列（如"达人UID"）
+        # 9. 独立的快手 uid 列
+        if ks_uid_col and pd.notna(row[ks_uid_col]):
+            ks_uid = str(row[ks_uid_col]).strip()
+            uid = ks_uid  # 快手也使用 uid 字段
+            platform = "kuaishou"
+
+        # 10. 独立的快手 photo_id 列
+        if ks_photo_id_col and pd.notna(row[ks_photo_id_col]):
+            photo_id = str(row[ks_photo_id_col]).strip()
+            platform = "kuaishou"
+
+        # 11. 处理通用的 uid 列（如"达人UID"）
         # 如果没有匹配到任何特定平台的 ID 列，但有 mid_col 的数据
         if platform == "unknown" and mid_col and pd.notna(row[mid_col]):
             # 将通用的 uid 存储为 user_id，让 LLM 根据上下文判断平台
@@ -333,6 +388,8 @@ def parse_excel(file_bytes: bytes) -> dict[str, Any]:
             or uid is not None
             or user_id is not None
             or note_id is not None
+            or ks_uid is not None
+            or photo_id is not None
             or link_info.get("type") in ("video", "short", "space")
             or platform != "unknown"
         )
@@ -362,7 +419,7 @@ def parse_excel(file_bytes: bytes) -> dict[str, Any]:
             "nickname": display_name,
             "upper_mid": upper_mid,
             "platform": platform,
-            "link_type": link_info.get("type", "unknown") if (link_info.get("type") != "unknown" or space_url) else ("video" if (bvid or aweme_id or note_id) else "unknown"),
+            "link_type": link_info.get("type", "unknown") if (link_info.get("type") != "unknown" or space_url) else ("video" if (bvid or aweme_id or note_id or photo_id) else "unknown"),
             "bvid": bvid,
             "avid": avid,
             "short_code": link_info.get("short_code"),
@@ -374,6 +431,9 @@ def parse_excel(file_bytes: bytes) -> dict[str, Any]:
             # 小红书字段
             "user_id": user_id,
             "note_id": note_id,
+            # 快手字段
+            "ks_uid": ks_uid,
+            "photo_id": photo_id,
         })
 
     if not creators:

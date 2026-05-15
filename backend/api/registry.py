@@ -7,10 +7,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from api import bilibili, douyin, xiaohongshu
+from api import bilibili, douyin, xiaohongshu, kuaishou
 
 # 平台列表：新增平台时在此追加导入
-PLATFORMS = [bilibili, douyin, xiaohongshu]
+PLATFORMS = [bilibili, douyin, xiaohongshu, kuaishou]
 
 # 动态合并所有平台的 API_REGISTRY
 API_REGISTRY: dict[str, Any] = {}
@@ -121,6 +121,31 @@ TOOL_META: dict[str, dict[str, Any]] = {
         "return_fields": [
             "likeNum(点赞数)", "favNum(收藏数)", "cmtNum(评论数)", "readNum(阅读数)",
             "shareNum(分享数)", "followCnt(涨粉数)", "userInfo(作者信息)",
+        ],
+    },
+    # 快手工具
+    "get_ks_video_list": {
+        "description": "获取快手用户视频列表，返回视频ID/标题/封面/播放量/点赞/评论等",
+        "input_params": ["uid(快手用户UID)", "pcursor(时间戳毫秒,可选)"],
+        "return_fields": [
+            "data(视频列表数组, 每条含photo_id/caption/view_count/like_count/comment_count/share_count)",
+            "cover_urls(封面图)", "timestamp(发布时间)", "user_id(用户ID)",
+        ],
+    },
+    "get_ks_video_detail": {
+        "description": "获取快手单个视频详情，返回完整的视频数据和统计信息",
+        "input_params": ["photo_id(快手视频ID)"],
+        "return_fields": [
+            "caption(标题/简介)", "view_count(播放量)", "like_count(点赞数)",
+            "comment_count(评论数)", "share_count(分享数)", "duration(时长)",
+        ],
+    },
+    "get_ks_user_info": {
+        "description": "获取快手用户基础数据（昵称/头像/粉丝数/作品数等）",
+        "input_params": ["uid(快手用户UID)"],
+        "return_fields": [
+            "profile(用户资料: user_name/headurl/kwaiId/user_id)",
+            "ownerCount(统计数据: fan/photo/follow)",
         ],
     },
 }

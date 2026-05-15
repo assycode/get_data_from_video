@@ -264,7 +264,7 @@ TOOL_OUTPUT_EXTRACTORS: dict[str, Callable[[Any], dict[str, Any]]] = {
     },
     # --- 小红书工具 ---
     "get_xhs_notes_list": lambda data: {
-        "note_list": _extract_vlist(data),
+        "video_list": _extract_vlist(data),  # 统一使用 video_list 字段名
         "total": _safe_get(data, "data", "total"),
         "page_info": _extract_page_info(data),
     },
@@ -276,6 +276,31 @@ TOOL_OUTPUT_EXTRACTORS: dict[str, Callable[[Any], dict[str, Any]]] = {
         "share_num": _safe_get(data, "data", "shareNum"),
         "follow_cnt": _safe_get(data, "data", "followCnt"),
         "user_info": _safe_get(data, "data", "userInfo"),
+        "contentTags": _safe_get(data, "data", "contentTags"),
+        "title": _safe_get(data, "data", "title"),
+        "content": _safe_get(data, "data", "content"),
+    },
+    # --- 快手工具 ---
+    "get_ks_video_list": lambda data: {
+        "video_list": _extract_vlist(data),
+        "pcursor": _safe_get(data, "data", "pcursor"),
+    },
+    "get_ks_video_detail": lambda data: {
+        "photo_id": _safe_get(data, "data", "photo_id"),
+        "title": _safe_get(data, "data", "title"),
+        "caption": _safe_get(data, "data", "caption"),
+        "view_count": _safe_get(data, "data", "view_count"),
+        "like_count": _safe_get(data, "data", "like_count"),
+        "comment_count": _safe_get(data, "data", "comment_count"),
+        "tags": _safe_get(data, "data", "tags"),
+        "create_time": _safe_get(data, "data", "create_time"),
+    },
+    "get_ks_user_info": lambda data: {
+        "user_id": _safe_get(data, "data", "user_id"),
+        "user_name": _safe_get(data, "data", "user_name"),
+        "user_text": _safe_get(data, "data", "user_text"),
+        "fan_count": _safe_get(data, "data", "fan_count"),
+        "follow_count": _safe_get(data, "data", "follow_count"),
     },
 }
 
@@ -287,11 +312,17 @@ def extract_tool_output(tool_name: str, data: Any, param_pool: dict[str, Any]) -
     """
     extractor = TOOL_OUTPUT_EXTRACTORS.get(tool_name)
     if extractor is None:
+        logger.warning(f"[ParamPool] 工具 {tool_name} 没有对应的 extractor")
         return
     try:
         extracted = extractor(data)
+        logger.info(f"[ParamPool] 工具 {tool_name} 提取结果: keys={list(extracted.keys())}")
         for key, val in extracted.items():
             if val is not None:
                 param_pool[key] = val
+                if key == "video_list":
+                    logger.info(f"[ParamPool] 工具 {tool_name} 设置 video_list，长度={len(val) if isinstance(val, list) else 'N/A'}")
     except Exception as exc:
         logger.warning(f"[ParamPool] 工具 {tool_name} 输出提取异常: {exc}")
+        import traceback
+        logger.warning(f"[ParamPool] 异常堆栈: {traceback.format_exc()}")

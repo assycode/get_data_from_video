@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 
 
 # 详情查询并发控制
-_EACH_DETAIL_CONCURRENCY = 5  # 同时查询 5 条视频
+_EACH_DETAIL_CONCURRENCY = 2  # 同时查询 2 条视频（降低并发避免限流）
+_EACH_DETAIL_DELAY = 0.5  # 每条视频查询间隔 0.5 秒
 
 
 # ------------------------------------------------------------------------------
@@ -57,6 +58,14 @@ async def _fetch_single_detail(
     aweme_id = item.get("aweme_id")
     if aweme_id:
         local_pool["aweme_id"] = aweme_id
+    # 小红书 note_id（列表返回的是 noteId，需要映射为 note_id）
+    note_id = item.get("note_id") or item.get("noteId")
+    if note_id:
+        local_pool["note_id"] = note_id
+    # 快手 photo_id
+    photo_id = item.get("photo_id")
+    if photo_id:
+        local_pool["photo_id"] = photo_id
 
     args = build_args_from_pool(detail_tool, local_pool)
     if args is None:
@@ -134,6 +143,44 @@ async def _fetch_single_detail(
     if duration is not None:
         merged["duration"] = duration
 
+    # 小红书详情合并
+    content_tags = local_pool.get("contentTags")
+    if isinstance(content_tags, list) and content_tags:
+        merged["contentTags"] = content_tags
+    note_title = local_pool.get("title")
+    if note_title:
+        merged["title"] = note_title
+    note_content = local_pool.get("content")
+    if note_content:
+        merged["content"] = note_content
+        # 合并 content 到 desc 用于话题过滤
+        merged["desc"] = note_content
+    # 小红书统计字段
+    for skey in ("like_num", "fav_num", "cmt_num", "read_num", "share_num", "follow_cnt"):
+        val = local_pool.get(skey)
+        if val is not None:
+            merged[skey] = val
+
+    # 快手详情合并
+    ks_title = local_pool.get("title")
+    if ks_title:
+        merged["title"] = ks_title
+    ks_caption = local_pool.get("caption")
+    if ks_caption:
+        merged["caption"] = ks_caption
+        merged["desc"] = ks_caption  # 合并 caption 到 desc 用于话题过滤
+    ks_tags = local_pool.get("tags")
+    if isinstance(ks_tags, list) and ks_tags:
+        merged["tags"] = ks_tags
+    # 快手统计字段
+    for ks_key in ("view_count", "like_count", "comment_count"):
+        val = local_pool.get(ks_key)
+        if val is not None:
+            merged[ks_key] = val
+    ks_create_time = local_pool.get("create_time")
+    if ks_create_time:
+        merged["create_time"] = ks_create_time
+
     return merged
 
 
@@ -163,6 +210,9 @@ async def _query_each_detail(
 
     async def _fetch_with_limit(item: dict, idx: int) -> dict:
         async with semaphore:
+            # 添加延迟避免触发 API 限流
+            if _EACH_DETAIL_DELAY > 0:
+                await asyncio.sleep(_EACH_DETAIL_DELAY)
             return await _fetch_single_detail(item, idx, detail_tool, param_pool, task_id, nickname)
 
     # 并发执行所有详情查询
@@ -230,6 +280,8 @@ async def process_one_creator(
             workflow.each_detail.tool_name = "get_video_detail"
         elif platform == "douyin" and not workflow.each_detail.tool_name:
             workflow.each_detail.tool_name = "get_douyin_video_detail"
+        elif platform == "kuaishou" and not workflow.each_detail.tool_name:
+            workflow.each_detail.tool_name = "get_ks_video_detail"
     
     logger.info(f"[Batch][{task_id}] {nickname} each_detail: need_query={workflow.each_detail.need_query}, tool_name={workflow.each_detail.tool_name}")
 
@@ -246,8 +298,14 @@ async def process_one_creator(
         "sec_uid": creator.get("sec_uid"),
         "aweme_id": creator.get("aweme_id"),
         "uid": creator.get("uid"),
+        # 小红书字段
+        "user_id": creator.get("user_id"),
+        "note_id": creator.get("note_id"),
+        # 快手字段
+        "ks_uid": creator.get("ks_uid") or creator.get("uid"),
+        "photo_id": creator.get("photo_id"),
     }
-    logger.debug(f"[Batch][{task_id}] {nickname} 初始 param_pool: aweme_id={param_pool.get('aweme_id')}, sec_uid={param_pool.get('sec_uid')}, uid={param_pool.get('uid')}")
+    logger.info(f"[Batch][{task_id}] {nickname} 初始 param_pool: user_id={param_pool.get('user_id')}, note_id={param_pool.get('note_id')}, aweme_id={param_pool.get('aweme_id')}, sec_uid={param_pool.get('sec_uid')}, uid={param_pool.get('uid')}")
 
     # 兜底：如果 param_pool 里有 short_code 但没有 bvid，且 tool_sequence 中没有 resolve_short_url，
     # 自动在最前面执行 resolve_short_url，防止 LLM 漏编排导致所有短链接参数不足
@@ -302,8 +360,12 @@ async def process_one_creator(
                     logger.warning(f"[Batch][{task_id}] {nickname} {tool_name} 第{pn}页失败: {result.error}")
                     break  # 失败停止翻页，继续 workflow 后续步骤
 
+                # 调试：提取前查看 param_pool
+                logger.info(f"[Batch][{task_id}] {nickname} {tool_name} 提取前 video_list 长度={len(param_pool.get('video_list', []))}")
                 extract_tool_output(tool_name, result.data, param_pool)
-
+                # 调试：查看提取后的 param_pool
+                logger.info(f"[Batch][{task_id}] {nickname} {tool_name} 提取后 video_list 长度={len(param_pool.get('video_list', []))}")
+                
                 items = param_pool.get("video_list", [])
                 if not items:
                     break
@@ -332,6 +394,11 @@ async def process_one_creator(
             extract_tool_output(tool_name, result.data, param_pool)
             video_list_len = len(param_pool.get("video_list", []))
             logger.info(f"[Batch][{task_id}] {nickname} {tool_name} 执行成功，当前 video_list 长度: {video_list_len}")
+            # 调试：打印 result.data 的结构
+            if isinstance(result.data, dict):
+                logger.info(f"[Batch][{task_id}] {nickname} {tool_name} result.data.keys={list(result.data.keys())}")
+            elif isinstance(result.data, list):
+                logger.info(f"[Batch][{task_id}] {nickname} {tool_name} result.data 是 list，长度={len(result.data)}")
 
     # each_detail 处理
     logger.debug(f"[Batch][{task_id}] {nickname} 检查 each_detail: need_query={workflow.each_detail.need_query}, tool_name={workflow.each_detail.tool_name}")

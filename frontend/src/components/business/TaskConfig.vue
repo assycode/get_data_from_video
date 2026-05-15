@@ -3,7 +3,7 @@
 // 任务配置表单组件
 // =============================================================================
 
-import { reactive } from 'vue'
+import { reactive, withDefaults, defineProps } from 'vue'
 import FileUploader from './FileUploader.vue'
 
 interface FormState {
@@ -12,6 +12,16 @@ interface FormState {
   startDate: string
   file: File | null
 }
+
+interface Props {
+  isRunning?: boolean
+  isPlanning?: boolean
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  isRunning: false,
+  isPlanning: false,
+})
 
 const emit = defineEmits<{
   submit: [form: FormState]
@@ -84,12 +94,21 @@ function handleSubmit() {
 
       <el-form-item>
         <el-button 
+          v-if="!isRunning && !isPlanning"
           type="primary" 
           size="large" 
           @click="handleSubmit"
           :disabled="!form.file"
         >
           开始批量抓取
+        </el-button>
+        <el-button 
+          v-else
+          type="danger" 
+          size="large" 
+          @click="emit('cancel')"
+        >
+          取消任务
         </el-button>
       </el-form-item>
     </el-form>

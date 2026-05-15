@@ -27,7 +27,10 @@ from models.schemas import BatchTaskRequest, ChatRequest, PlanTaskRequest
 
 import asyncio
 import json
+import logging
 import uuid
+
+logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api", tags=["Agent"])
@@ -105,11 +108,9 @@ async def batch_task_from_excel(
         if plan_json:
             try:
                 plan = json.loads(plan_json)
-                logger = __import__("logging").getLogger(__name__)
                 logger.info("[Router] 使用前端传入的 plan_json，跳过 batch_task_from_excel的LLM 选型")
                 yield _sse_event("thought", {"plan": plan, "message": "使用已选型的执行计划"})
             except json.JSONDecodeError as exc:
-                logger = __import__("logging").getLogger(__name__)
                 logger.error(f"[Router] plan_json 解析失败: {exc}")
                 yield _sse_event("error", {"message": f"plan_json 格式错误: {exc}"})
                 yield _sse_event("done", {})
@@ -121,7 +122,6 @@ async def batch_task_from_excel(
             try:
                 plan = await generate_plan(question, tools, filters, creators)
             except Exception as exc:
-                logger = __import__("logging").getLogger(__name__)
                 logger.error(f"[Router] LLM 选型失败: {exc}")
                 yield _sse_event("error", {"message": f"LLM 接口选型失败: {exc}"})
                 yield _sse_event("done", {})
@@ -161,12 +161,25 @@ async def plan_task(request: PlanTaskRequest):
 
     try:
         plan = await generate_plan(request.question, tools, filters, request.creators)
+        logger.info(f"[Router] plan_task 获取 plan 成功，type={type(plan)}, workflows keys={list(plan.get('workflows', {}).keys()) if isinstance(plan, dict) else 'N/A'}")
     except Exception as exc:
-        logger = __import__("logging").getLogger(__name__)
         logger.error(f"[Router] LLM 选型失败: {exc}")
         raise HTTPException(status_code=500, detail=f"LLM 接口选型失败: {exc}")
 
-    return {"code": 0, "message": "success", "data": plan}
+    response_data = {"code": 0, "message": "success", "data": plan}
+    logger.info(f"[Router] plan_task 准备返回响应，data type={type(response_data['data'])}")
+    
+    # 测试 JSON 序列化
+    try:
+        import json
+        test_json = json.dumps(response_data, ensure_ascii=False)
+        logger.info(f"[Router] response_data JSON 序列化成功，长度={len(test_json)}")
+    except Exception as exc:
+        logger.error(f"[Router] response_data JSON 序列化失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"响应序列化失败: {exc}")
+    
+    logger.info("[Router] plan_task 返回 response_data")
+    return response_data
 
 
 @router.post("/start-task")
@@ -202,7 +215,6 @@ async def start_task(
 
     # 生成任务唯一标识
     task_id = str(uuid.uuid4())
-    logger = __import__("logging").getLogger(__name__)
 
     # 生成 plan（优先用前端传入的 plan_json）
     plan = None

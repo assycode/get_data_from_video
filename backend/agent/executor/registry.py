@@ -29,6 +29,9 @@ from api.data_apis import (
     get_douyin_user_videos,
     get_xhs_notes_list,
     get_xhs_note_info,
+    get_ks_video_list,
+    get_ks_video_detail,
+    get_ks_user_info,
 )
 
 from .models import (
@@ -46,6 +49,9 @@ from .models import (
     GetDouyinUserVideosArgs,
     GetXhsNotesListArgs,
     GetXhsNoteInfoArgs,
+    GetKsVideoListArgs,
+    GetKsVideoDetailArgs,
+    GetKsUserInfoArgs,
 )
 
 logger = logging.getLogger(__name__)
@@ -159,6 +165,32 @@ TOOL_META: dict[str, dict[str, Any]] = {
             "shareNum(分享数)", "followCnt(涨粉数)", "userInfo(作者信息)",
         ],
     },
+    # --- 快手工具 ---
+    "get_ks_video_list": {
+        "description": "获取快手用户视频列表，返回视频ID/标题/播放量/点赞/评论等",
+        "input_params": ["uid(快手用户UID)", "pcursor(分页时间戳,可选)"],
+        "return_fields": [
+            "list(视频列表数组, 每条含photo_id/title/coverUrl/create_time/view_count/like_count/comment_count)",
+            "pcursor(下一页时间戳)",
+        ],
+    },
+    "get_ks_video_detail": {
+        "description": "获取快手视频详情，返回完整的视频数据和话题标签",
+        "input_params": ["photo_id(快手视频ID/作品ID)"],
+        "return_fields": [
+            "photo_id(视频ID)", "title(标题)", "caption(描述/文案)",
+            "view_count(播放数)", "like_count(点赞数)", "comment_count(评论数)",
+            "tags(话题标签数组)", "create_time(发布时间)",
+        ],
+    },
+    "get_ks_user_info": {
+        "description": "获取快手用户基础数据（昵称/头像/粉丝数等）",
+        "input_params": ["uid(快手用户UID)"],
+        "return_fields": [
+            "user_id(用户ID)", "user_name(昵称)", "user_text(简介)",
+            "fan_count(粉丝数)", "follow_count(关注数)",
+        ],
+    },
 }
 
 # ------------------------------------------------------------------------------
@@ -238,6 +270,22 @@ TOOL_REGISTRY: dict[str, ToolEntry] = {
         "args_model": GetXhsNoteInfoArgs,
         "description": "获取小红书笔记详情",
     },
+    # --- 快手工具 ---
+    "get_ks_video_list": {
+        "func": get_ks_video_list,
+        "args_model": GetKsVideoListArgs,
+        "description": "获取快手用户视频列表",
+    },
+    "get_ks_video_detail": {
+        "func": get_ks_video_detail,
+        "args_model": GetKsVideoDetailArgs,
+        "description": "获取快手视频详情",
+    },
+    "get_ks_user_info": {
+        "func": get_ks_user_info,
+        "args_model": GetKsUserInfoArgs,
+        "description": "获取快手用户基础数据",
+    },
 }
 
 # ------------------------------------------------------------------------------
@@ -254,7 +302,9 @@ PARAM_ALIASES: dict[str, list[str]] = {
     "uid": ["uid", "author_user_id"],  # get_douyin_room_id 可从 author_user_id 推导
     # 小红书参数别名
     "user_id": ["user_id", "xhs_user_id"],
-    "note_id": ["note_id", "xhs_note_id"],
+    "note_id": ["note_id", "noteId", "xhs_note_id"],
+    # 快手参数别名
+    "photo_id": ["photo_id", "photoId", "ks_photo_id"],
 }
 
 

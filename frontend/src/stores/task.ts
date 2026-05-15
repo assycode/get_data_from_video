@@ -50,13 +50,16 @@ export const useTaskStore = defineStore('task', () => {
     saveTaskId(taskId)
   }
 
-  function clearTask() {
+  function clearTask(keepPlan: boolean = true) {
     currentTaskId.value = ''
     clearTaskId()
     status.value = 'idle'
     progress.value = { completed: 0, total: 0, percent: 0 }
     creatorResults.value = []
-    llmPlan.value = null
+    // 默认保留大模型选型结果，方便用户查看
+    if (!keepPlan) {
+      llmPlan.value = null
+    }
     isPlanning.value = false
     errorMsg.value = ''
   }
@@ -106,7 +109,7 @@ export const useTaskStore = defineStore('task', () => {
   }
 
   function reset() {
-    clearTask()
+    clearTask(false) // 新任务开始时清空所有状态，包括 plan
   }
 
   // ==========================================================================

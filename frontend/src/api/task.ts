@@ -10,7 +10,7 @@ import type {
   Creator,
 } from '../types'
 
-/** 任务规划 - 获取 LLM 执行计划 */
+/** 任务规划 - 获取 LLM 执行计划 (带10分钟超时) */
 export async function planTask(
   question: string,
   topic: string,
@@ -18,16 +18,26 @@ export async function planTask(
   creators: Creator[],
   signal?: AbortSignal
 ): Promise<LLMWorkflowPlan> {
-  return post<LLMWorkflowPlan>(
-    '/api/plan-task',
-    {
-      question,
-      topic,
-      start_date: startDate,
-      creators,
-    },
-    { signal }
-  )
+  // 创建 AbortController 用于超时控制
+  const timeoutController = new AbortController()
+  const timeoutId = setTimeout(() => timeoutController.abort(), 10 * 60 * 1000) // 10分钟超时
+  
+  try {
+    return await post<LLMWorkflowPlan>(
+      '/api/plan-task',
+      {
+        question,
+        topic,
+        start_date: startDate,
+        creators,
+      },
+      // 如果外部有 signal，优先使用外部 signal（取消按钮控制）
+      // 否则使用超时控制
+      { signal: signal || timeoutController.signal }
+    )
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 /** 创建任务 */

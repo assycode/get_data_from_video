@@ -181,6 +181,29 @@ export function useTask(
           payload.content.total || 0
         )
         resultStore.setMatchedVideos(payload.content.matched_so_far || 0)
+        // 实时更新视频数据和导出字段
+        if (payload.content.videos) {
+          resultStore.setVideos(payload.content.videos)
+        }
+        if (payload.content.export_fields) {
+          resultStore.setExportFields(payload.content.export_fields)
+        }
+        if (payload.content.total) {
+          resultStore.setTotalCreators(payload.content.total)
+        }
+        break
+
+      case 'creator_done':
+        // 达人处理完成，添加到达人结果列表
+        const status = payload.content.status || 'unknown'
+        taskStore.addCreatorResult({
+          nickname: payload.content.nickname || '未知',
+          status: status === 'success' ? 'success' : status === 'error' ? 'error' : 'pending',
+          total_videos: 0,
+          candidate_videos: payload.content.matched_videos || 0,
+          matched_videos: payload.content.matched_videos || 0,
+          error: payload.content.message || '',
+        })
         break
 
       case 'resume':
@@ -254,6 +277,7 @@ export function useTask(
       planAbortController.value.abort()
       planAbortController.value = null
       taskStore.setPlanning(false)
+      taskStore.clearTask()  // 重置状态，确保按钮恢复
       ElMessage.info('已取消规划')
       if (taskId) {
         try {
@@ -330,6 +354,7 @@ export function useTask(
     if (e.name === 'AbortError') {
       // 用户取消，静默处理，但仍需重置状态
       taskStore.setPlanning(false)
+      taskStore.clearTask()  // 重置状态，确保按钮恢复
       return
     }
     

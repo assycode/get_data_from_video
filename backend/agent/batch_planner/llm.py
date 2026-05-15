@@ -101,6 +101,8 @@ def _build_creator_summary(creators: list[dict]) -> str:
     has_sec_uid = 0
     has_aweme_id = 0
     has_uid = 0
+    has_xhs_user_id = 0
+    has_xhs_note_id = 0
     for c in creators:
         platform = c.get("platform", "unknown")
         platform_counts[platform] = platform_counts.get(platform, 0) + 1
@@ -120,6 +122,10 @@ def _build_creator_summary(creators: list[dict]) -> str:
             has_aweme_id += 1
         if c.get("uid"):
             has_uid += 1
+        if c.get("user_id") not in [None, ""]:
+            has_xhs_user_id += 1
+        if c.get("note_id") not in [None, ""]:
+            has_xhs_note_id += 1
 
     lines = [f"共 {total} 条记录，按平台分布："]
     for plat, count in sorted(platform_counts.items(), key=lambda x: -x[1]):
@@ -142,6 +148,10 @@ def _build_creator_summary(creators: list[dict]) -> str:
         lines.append(f"  - 含 aweme_id（抖音视频ID）: {has_aweme_id} 条")
     if has_uid:
         lines.append(f"  - 含 uid（抖音数字UID）: {has_uid} 条")
+    if has_xhs_user_id:
+        lines.append(f"  - 含 user_id（小红书用户ID）: {has_xhs_user_id} 条 ⚠️ 小红书工作流必须编排 get_xhs_notes_list")
+    if has_xhs_note_id:
+        lines.append(f"  - 含 note_id（小红书笔记ID）: {has_xhs_note_id} 条 ⚠️ 可直接调用 get_xhs_note_info")
 
     # 给 LLM 多个示例，优先覆盖不同 platform + link_type
     samples: list[str] = []
@@ -154,9 +164,9 @@ def _build_creator_summary(creators: list[dict]) -> str:
         if plat in seen_platforms:
             continue
         fields = []
-        for key in ("nickname", "platform", "link_type", "upper_mid", "bvid", "avid", "short_code", "sec_uid", "aweme_id", "uid"):
+        for key in ("nickname", "platform", "link_type", "upper_mid", "bvid", "avid", "short_code", "sec_uid", "aweme_id", "uid", "user_id", "note_id"):
             val = c.get(key)
-            if val is not None:
+            if val not in [None, ""]:
                 fields.append(f"{key}={val!r}")
         sample_str = f"{{{', '.join(fields)}}}"
         if sample_str:
@@ -167,9 +177,9 @@ def _build_creator_summary(creators: list[dict]) -> str:
         if len(samples) >= 3:
             break
         fields = []
-        for key in ("nickname", "platform", "link_type", "upper_mid", "bvid", "avid", "short_code", "sec_uid", "aweme_id", "uid"):
+        for key in ("nickname", "platform", "link_type", "upper_mid", "bvid", "avid", "short_code", "sec_uid", "aweme_id", "uid", "user_id", "note_id"):
             val = c.get(key)
-            if val is not None:
+            if val not in [None, ""]:
                 fields.append(f"{key}={val!r}")
         sample_str = f"{{{', '.join(fields)}}}"
         if sample_str and sample_str not in samples:
@@ -199,16 +209,57 @@ async def generate_plan(
 
     creator_summary = _build_creator_summary(creators or [])
 
+    # 提取实际存在的平台列表
+    platforms_in_excel = set()
+    for c in creators:
+        plat = c.get("platform", "unknown")
+        if plat and plat != "unknown":
+            platforms_in_excel.add(plat)
+    
+    # 调试：打印前3个creator的完整数据
+    for i, c in enumerate(creators[:3]):
+        logger.info(f"[Debug] Creator {i}: platform={c.get('platform')}, user_id={c.get('user_id')!r}, note_id={c.get('note_id')!r}, upper_mid={c.get('upper_mid')}, sec_uid={c.get('sec_uid')}, ks_uid={c.get('ks_uid')!r}, uid={c.get('uid')!r}, aweme_id={c.get('aweme_id')}")
+    
+    # 根据字段推断平台（如果 platform 字段未设置或不够明确）
+    # 使用空字符串检查，避免空字符串被视为 falsy
+    has_xhs_fields = any((c.get("user_id") not in [None, ""]) or (c.get("note_id") not in [None, ""]) for c in creators)
+    # 抖音：使用 sec_uid 或 aweme_id 判断（uid 可能是快手的，不能作为抖音判断依据）
+    has_douyin_fields = any((c.get("sec_uid") not in [None, ""]) or (c.get("aweme_id") not in [None, ""]) for c in creators)
+    has_bilibili_fields = any(c.get("upper_mid") or c.get("bvid") for c in creators)
+    # 快手：使用 ks_uid 判断（uid 字段可能是通用的，不能单独作为判断依据）
+    has_ks_fields = any((c.get("ks_uid") not in [None, ""]) or (c.get("photo_id") not in [None, ""]) for c in creators)
+    
+    if has_xhs_fields and "xiaohongshu" not in platforms_in_excel:
+        platforms_in_excel.add("xiaohongshu")
+    if has_douyin_fields and "douyin" not in platforms_in_excel:
+        platforms_in_excel.add("douyin")
+    if has_bilibili_fields and "bilibili" not in platforms_in_excel:
+        platforms_in_excel.add("bilibili")
+    if has_ks_fields and "kuaishou" not in platforms_in_excel:
+        platforms_in_excel.add("kuaishou")
+    
+    platforms_str = ", ".join(sorted(platforms_in_excel)) if platforms_in_excel else "未知"
+    
     prompt = (
         f"【用户需求】\n{question}\n\n"
         f"【Excel 中已有的数据字段】\n{creator_summary}\n\n"
+        f"【Excel 中实际存在的平台】\n"
+        f"检测到以下平台的数据: {platforms_str}\n"
+        f"字段推断: 小红书={has_xhs_fields}, 抖音={has_douyin_fields}, B站={has_bilibili_fields}, 快手={has_ks_fields}\n\n"
         f"【可用工具列表】\n{tools_desc}\n\n"
-        "请根据用户需求和 Excel 中的数据字段，按平台分组生成工作流规划 JSON。\n"
-        "关键要求：\n"
-        "1. workflows 中只为 Excel 里实际出现的平台编排工作流。\n"
-        "2. 每个平台的工作流独立编排，工具不能跨平台混用。\n"
-        "3. 参数不足的步骤会自动跳过，不会报错。\n"
-        "4. export_fields 可以包含多个平台的字段，缺失的字段后端会自动留空。"
+        "【强制性规则 - 必须严格遵守】\n"
+        "1. **workflows 必须只为 Excel 中实际检测到的平台编排工作流**。\n"
+        "   - 如果检测到小红书数据（user_id/note_id字段），必须编排 xiaohongshu 工作流\n"
+        "   - 如果检测到抖音数据（sec_uid/uid/aweme_id字段），必须编排 douyin 工作流\n"
+        "   - 如果检测到B站数据（upper_mid/bvid字段），必须编排 bilibili 工作流\n"
+        "   - 如果检测到快手数据（ks_uid/photo_id字段），必须编排 kuaishou 工作流\n"
+        "2. **严禁为未检测到的平台编排工作流**\n"
+        "   - 不要为没有数据的平台生成工作流\n"
+        "   - 不要生成空的工作流\n"
+        "3. 每个平台的工作流独立编排，工具不能跨平台混用\n"
+        "4. 参数不足的步骤会自动跳过，不会报错\n"
+        "5. export_fields 可以包含多个平台的字段，缺失的字段后端会自动留空\n\n"
+        "请根据实际检测到的平台，生成工作流规划 JSON："
     )
 
     client = _get_client()
@@ -258,6 +309,9 @@ async def generate_plan(
         choice = response.choices[0]
         msg = choice.message
         content = msg.content or ""
+        
+        # 打印 LLM 返回的原始内容用于调试
+        logger.info(f"[Plan] LLM 原始返回内容:\n{content[:2000]}...")
 
         if not content.strip():
             last_error = f"LLM 返回空内容 (finish_reason={choice.finish_reason})"
@@ -340,7 +394,21 @@ async def generate_plan(
         gf.end_date = user_filters["end_date"]
 
     # 转回 dict 保持与原有接口兼容
-    plan = workflow_plan.model_dump()
+    try:
+        plan = workflow_plan.model_dump()
+        logger.info(f"[Plan] model_dump() 成功，plan type={type(plan)}")
+    except Exception as exc:
+        logger.error(f"[Plan] model_dump() 失败: {exc}")
+        raise
+    
+    # 测试 JSON 序列化
+    try:
+        json_str = json.dumps(plan, ensure_ascii=False)
+        logger.info(f"[Plan] JSON 序列化成功，长度={len(json_str)}")
+    except Exception as exc:
+        logger.error(f"[Plan] JSON 序列化失败: {exc}")
+        raise
+    
     # 日志：输出每个平台的工作流
     wf_summary = []
     for plat, wf in (plan.get("workflows") or {}).items():

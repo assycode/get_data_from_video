@@ -67,11 +67,42 @@ async def run_batch_task(
     all_matched_videos: list[dict] = []
     semaphore = asyncio.Semaphore(settings.BATCH_CONCURRENCY)
 
-    async def _process(creator: dict, idx: int) -> list[dict]:
+    async def _process(creator: dict, idx: int) -> dict:
+        """处理单个达人，返回包含达人信息和匹配结果的字典。"""
+        nickname = creator.get("nickname", "未知")
+        platform = creator.get("platform", "unknown")
+        
         async with semaphore:
             if cancel_event.is_set():
-                return []
-            return await process_one_creator(creator, idx, workflow_plan, task_id)
+                return {
+                    "nickname": nickname,
+                    "platform": platform,
+                    "status": "cancelled",
+                    "matched_videos": 0,
+                    "videos": [],
+                    "message": "任务已取消",
+                }
+            
+            try:
+                videos = await process_one_creator(creator, idx, workflow_plan, task_id)
+                return {
+                    "nickname": nickname,
+                    "platform": platform,
+                    "status": "success" if videos else "empty",
+                    "matched_videos": len(videos),
+                    "videos": videos,
+                    "message": f"匹配 {len(videos)} 条视频" if videos else "无匹配视频",
+                }
+            except Exception as e:
+                logger.error(f"[Batch][{task_id}] {nickname} 处理失败: {e}")
+                return {
+                    "nickname": nickname,
+                    "platform": platform,
+                    "status": "error",
+                    "matched_videos": 0,
+                    "videos": [],
+                    "message": str(e),
+                }
 
     tasks = [asyncio.create_task(_process(c, i)) for i, c in enumerate(creators)]
     cancel_watcher = asyncio.create_task(_watch_cancel(task_id, cancel_event, tasks))
@@ -80,11 +111,26 @@ async def run_batch_task(
     background_continued = False
     try:
         for coro in asyncio.as_completed(tasks):
-            matched = await coro
+            result = await coro
             if cancel_event.is_set():
                 break
+            
+            # 提取匹配的视频
+            matched = result.get("videos", [])
             all_matched_videos.extend(matched)
             completed += 1
+            
+            # 推送达人处理结果
+            yield _sse_event("creator_done", {
+                "nickname": result["nickname"],
+                "platform": result["platform"],
+                "status": result["status"],
+                "matched_videos": result["matched_videos"],
+                "message": result["message"],
+                "completed": completed,
+                "total": len(creators),
+            })
+            
             if task_id:
                 await _update_task_cache(
                     task_id,
@@ -92,11 +138,13 @@ async def run_batch_task(
                     matched_so_far=len(all_matched_videos),
                     videos=all_matched_videos,
                 )
-            logger.info(f"[Batch][{task_id}] 进度: {completed}/{len(creators)}, 累计匹配: {len(all_matched_videos)}")
+            logger.info(f"[Batch][{task_id}] 进度: {completed}/{len(creators)}, 达人 {result['nickname']} 匹配: {result['matched_videos']}, 累计匹配: {len(all_matched_videos)}")
             yield _sse_event("progress", {
                 "completed": completed,
                 "total": len(creators),
                 "matched_so_far": len(all_matched_videos),
+                "videos": all_matched_videos,
+                "export_fields": workflow_plan.export_fields,
             })
     except asyncio.CancelledError:
         logger.info(f"[Batch][{task_id}] SSE 连接断开，任务继续在后台运行")

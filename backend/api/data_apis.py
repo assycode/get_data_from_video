@@ -32,6 +32,13 @@ from api.xiaohongshu import (
     get_xhs_note_info,
 )
 
+# 从快手包导入所有函数
+from api.kuaishou import (
+    get_ks_video_list,
+    get_ks_video_detail,
+    get_ks_user_info,
+)
+
 # 接口注册表（向后兼容，新代码建议使用 api.registry.API_REGISTRY）
 API_REGISTRY = {
     "get_up_info": get_up_info,
@@ -50,6 +57,10 @@ API_REGISTRY = {
     # 小红书接口
     "get_xhs_notes_list": get_xhs_notes_list,
     "get_xhs_note_info": get_xhs_note_info,
+    # 快手接口
+    "get_ks_video_list": get_ks_video_list,
+    "get_ks_video_detail": get_ks_video_detail,
+    "get_ks_user_info": get_ks_user_info,
 }
 
 # 同步辅助函数注册表（向后兼容）

@@ -86,3 +86,20 @@ class GetXhsNotesListArgs(BaseModel):
 class GetXhsNoteInfoArgs(BaseModel):
     """获取小红书笔记详情参数"""
     note_id: str = Field(..., description="笔记ID")
+
+
+# 快手工具参数模型
+class GetKsVideoListArgs(BaseModel):
+    """获取快手用户视频列表参数"""
+    uid: int | str = Field(..., description="快手用户UID")
+    pcursor: int | str | None = Field(default=None, description="时间戳毫秒级别，拉取比当前时间小的数据")
+
+
+class GetKsVideoDetailArgs(BaseModel):
+    """获取快手视频详情参数"""
+    photo_id: int | str = Field(..., description="快手视频ID")
+
+
+class GetKsUserInfoArgs(BaseModel):
+    """获取快手用户基础数据参数"""
+    uid: int | str = Field(..., description="快手用户UID")

@@ -18,6 +18,15 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+        // SSE 长连接支持 + LLM 选型超时（10分钟）
+        timeout: 600000,
+        proxyTimeout: 600000,
+        // 禁用缓存，确保 SSE 实时性
+        bypass: (req) => {
+          if (req.url?.includes('/task-progress/')) {
+            req.headers['cache-control'] = 'no-cache'
+          }
+        }
       }
     }
   }
