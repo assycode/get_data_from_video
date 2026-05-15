@@ -51,7 +51,7 @@ class Settings:
     LLM_API_KEY: str = _getenv("LLM_API_KEY", "sk-iSnAwGYCE8ayyytoo87gbaJejZdhnOJlpOh0SQaWAYwNSV4T")
     LLM_BASE_URL: str = _getenv("LLM_BASE_URL", "https://api.moonshot.cn/v1")
     LLM_MODEL: str = _getenv("LLM_MODEL", "kimi-k2.5")
-    LLM_MAX_TOKENS: int = int(_getenv("LLM_MAX_TOKENS", "8192"))
+    LLM_MAX_TOKENS: int = int(_getenv("LLM_MAX_TOKENS", "16384"))
     LLM_TEMPERATURE: float = float(_getenv("LLM_TEMPERATURE", "1"))
     LLM_WITE_TIME: int = _getenv("LLM_WITE_TIME", "2000")
 

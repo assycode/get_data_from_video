@@ -240,6 +240,13 @@ async def generate_plan(
     
     platforms_str = ", ".join(sorted(platforms_in_excel)) if platforms_in_excel else "未知"
     
+    # 根据实际平台生成简化的输出格式示例，避免LLM生成不必要的平台
+    workflow_keys = list(platforms_in_excel) if platforms_in_excel else ["bilibili"]
+    workflow_examples = []
+    for plat in workflow_keys:
+        workflow_examples.append(f'    "{plat}": {{"tool_sequence": [...], "page_rule": {{...}}, "each_detail": {{...}}}},')
+    workflow_example_str = "\n".join(workflow_examples)
+    
     prompt = (
         f"【用户需求】\n{question}\n\n"
         f"【Excel 中已有的数据字段】\n{creator_summary}\n\n"
@@ -248,18 +255,22 @@ async def generate_plan(
         f"字段推断: 小红书={has_xhs_fields}, 抖音={has_douyin_fields}, B站={has_bilibili_fields}, 快手={has_ks_fields}\n\n"
         f"【可用工具列表】\n{tools_desc}\n\n"
         "【强制性规则 - 必须严格遵守】\n"
-        "1. **workflows 必须只为 Excel 中实际检测到的平台编排工作流**。\n"
-        "   - 如果检测到小红书数据（user_id/note_id字段），必须编排 xiaohongshu 工作流\n"
-        "   - 如果检测到抖音数据（sec_uid/uid/aweme_id字段），必须编排 douyin 工作流\n"
-        "   - 如果检测到B站数据（upper_mid/bvid字段），必须编排 bilibili 工作流\n"
-        "   - 如果检测到快手数据（ks_uid/photo_id字段），必须编排 kuaishou 工作流\n"
-        "2. **严禁为未检测到的平台编排工作流**\n"
-        "   - 不要为没有数据的平台生成工作流\n"
-        "   - 不要生成空的工作流\n"
+        "1. **workflows 只能包含以下平台的工作流**: " + ", ".join(platforms_in_excel if platforms_in_excel else ["bilibili"]) + "\n"
+        "2. **严禁为未检测到的平台编排工作流** - 不要生成空平台的工作流\n"
         "3. 每个平台的工作流独立编排，工具不能跨平台混用\n"
         "4. 参数不足的步骤会自动跳过，不会报错\n"
         "5. export_fields 可以包含多个平台的字段，缺失的字段后端会自动留空\n\n"
-        "请根据实际检测到的平台，生成工作流规划 JSON："
+        "【输出格式要求】\n"
+        "workflows 只包含实际检测到的平台，格式如下：\n"
+        "{\n"
+        '  "global_filter": {"topic": "...", "start_date": "...", "end_date": "..."},\n'
+        '  "export_fields": [...],\n'
+        '  "workflows": {\n'
+        f"{workflow_example_str}\n"
+        '  },\n'
+        '  "reasoning": "..."\n'
+        "}\n\n"
+        "请严格按上述要求生成工作流规划 JSON："
     )
 
     client = _get_client()

@@ -313,9 +313,9 @@ def parse_excel(file_bytes: bytes) -> dict[str, Any]:
                 logger.info(f"[URL处理] 行{idx}: 提取到 mid={upper_mid}")
             bvid = link_info.get("bvid")
             avid = link_info.get("avid")
-            sec_uid = link_info.get("sec_uid")
-            user_id = link_info.get("user_id")  # 小红书用户ID
-            note_id = link_info.get("short_code")  # 小红书笔记ID可能来自短链接
+            sec_uid = link_info.get("sec_uid") if platform == "douyin" else None
+            user_id = link_info.get("user_id") if platform == "xiaohongshu" else None  # 小红书用户ID
+            note_id = link_info.get("short_code") if platform == "xiaohongshu" else None  # 小红书笔记ID可能来自短链接
 
         # 3. 独立的 bvid 列（B站强信号）
         if bvid_col and pd.notna(row[bvid_col]):
