@@ -37,6 +37,9 @@ from api.kuaishou import (
     get_ks_video_list,
     get_ks_video_detail,
     get_ks_user_info,
+    get_ks_topic_list,
+    get_ks_share_data,
+    get_ks_live,
 )
 
 # 接口注册表（向后兼容，新代码建议使用 api.registry.API_REGISTRY）
@@ -61,6 +64,9 @@ API_REGISTRY = {
     "get_ks_video_list": get_ks_video_list,
     "get_ks_video_detail": get_ks_video_detail,
     "get_ks_user_info": get_ks_user_info,
+    "get_ks_topic_list": get_ks_topic_list,
+    "get_ks_share_data": get_ks_share_data,
+    "get_ks_live": get_ks_live,
 }
 
 # 同步辅助函数注册表（向后兼容）

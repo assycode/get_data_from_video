@@ -59,9 +59,57 @@ async def get_ks_user_info(uid: int | str) -> dict[str, Any]:
     return await api_request(BASE_URL, "/ks-user", params)
 
 
+async def get_ks_topic_list(tag: str, pcursor: int | str | None = None) -> dict[str, Any]:
+    """获取快手话题列表
+    
+    Args:
+        tag: 话题标签
+        pcursor: 分页游标，用于翻页
+    
+    Returns:
+        话题列表数据
+    """
+    params = {"tag": tag}
+    if pcursor:
+        params["pcursor"] = pcursor
+    
+    return await api_request(BASE_URL, "/ks-topic", params)
+
+
+async def get_ks_share_data(photo_id: int | str) -> dict[str, Any]:
+    """获取快手视频分享数据
+    
+    Args:
+        photo_id: 快手视频ID
+    
+    Returns:
+        分享数据
+    """
+    params = {"photo_id": photo_id}
+    
+    return await api_request(BASE_URL, "/ks-share", params)
+
+
+async def get_ks_live(stream_id: str) -> dict[str, Any]:
+    """获取快手直播数据
+    
+    Args:
+        stream_id: 直播ID
+    
+    Returns:
+        直播数据
+    """
+    params = {"streamId": stream_id}
+    
+    return await api_request(BASE_URL, "/ks-live", params)
+
+
 # API 注册表
 API_REGISTRY = {
     "get_ks_video_list": get_ks_video_list,
     "get_ks_video_detail": get_ks_video_detail,
     "get_ks_user_info": get_ks_user_info,
+    "get_ks_topic_list": get_ks_topic_list,
+    "get_ks_share_data": get_ks_share_data,
+    "get_ks_live": get_ks_live,
 }

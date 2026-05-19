@@ -32,6 +32,9 @@ from api.data_apis import (
     get_ks_video_list,
     get_ks_video_detail,
     get_ks_user_info,
+    get_ks_topic_list,
+    get_ks_share_data,
+    get_ks_live,
 )
 
 from .models import (
@@ -52,6 +55,9 @@ from .models import (
     GetKsVideoListArgs,
     GetKsVideoDetailArgs,
     GetKsUserInfoArgs,
+    GetKsTopicListArgs,
+    GetKsShareDataArgs,
+    GetKsLiveArgs,
 )
 
 logger = logging.getLogger(__name__)
@@ -191,6 +197,30 @@ TOOL_META: dict[str, dict[str, Any]] = {
             "fan_count(粉丝数)", "follow_count(关注数)",
         ],
     },
+    "get_ks_topic_list": {
+        "description": "获取快手话题列表，按话题标签搜索相关视频",
+        "input_params": ["tag(话题标签)", "pcursor(分页游标,可选)"],
+        "return_fields": [
+            "list(视频列表数组, 每条含photo_id/caption/user_info等)",
+            "pcursor(下一页游标)", "llsid(会话ID)",
+        ],
+    },
+    "get_ks_share_data": {
+        "description": "获取快手视频分享数据，包含分享链接和分享用户信息",
+        "input_params": ["photo_id(快手视频ID)"],
+        "return_fields": [
+            "share_info(分享信息)", "shareUser(分享用户)", "shareUserProfile(分享用户主页)",
+            "action(跳转链接)",
+        ],
+    },
+    "get_ks_live": {
+        "description": "获取快手直播数据，包含直播流地址和直播间信息",
+        "input_params": ["stream_id(直播ID)"],
+        "return_fields": [
+            "liveStreamId(直播ID)", "caption(直播标题)", "user(主播信息)",
+            "playInfo(播放信息/流地址)", "timestamp(开始时间戳)", "feedBuildTime(截止时间戳)",
+        ],
+    },
 }
 
 # ------------------------------------------------------------------------------
@@ -285,6 +315,21 @@ TOOL_REGISTRY: dict[str, ToolEntry] = {
         "func": get_ks_user_info,
         "args_model": GetKsUserInfoArgs,
         "description": "获取快手用户基础数据",
+    },
+    "get_ks_topic_list": {
+        "func": get_ks_topic_list,
+        "args_model": GetKsTopicListArgs,
+        "description": "获取快手话题列表",
+    },
+    "get_ks_share_data": {
+        "func": get_ks_share_data,
+        "args_model": GetKsShareDataArgs,
+        "description": "获取快手视频分享数据",
+    },
+    "get_ks_live": {
+        "func": get_ks_live,
+        "args_model": GetKsLiveArgs,
+        "description": "获取快手直播数据",
     },
 }
 

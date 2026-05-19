@@ -103,3 +103,19 @@ class GetKsVideoDetailArgs(BaseModel):
 class GetKsUserInfoArgs(BaseModel):
     """获取快手用户基础数据参数"""
     uid: int | str = Field(..., description="快手用户UID")
+
+
+class GetKsTopicListArgs(BaseModel):
+    """获取快手话题列表参数"""
+    tag: str = Field(..., description="话题标签")
+    pcursor: int | str | None = Field(default=None, description="分页游标，用于翻页")
+
+
+class GetKsShareDataArgs(BaseModel):
+    """获取快手视频分享数据参数"""
+    photo_id: int | str = Field(..., description="快手视频ID")
+
+
+class GetKsLiveArgs(BaseModel):
+    """获取快手直播数据参数"""
+    stream_id: str = Field(..., description="直播ID")
