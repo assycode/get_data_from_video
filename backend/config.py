@@ -164,7 +164,15 @@ class Settings:
    - get_ks_video_list: 获取用户视频列表（类似B站的 get_video_list）
    - get_ks_video_detail: 获取单条视频详情
    - 如果 Excel 中有 kuaishou 平台的达人，必须在 workflows 中编排 kuaishou 的工作流，使用上述快手专用工具
-10. topic/start_date/end_date 必须从用户需求中提取。没有提到就留空字符串（""），严禁臆测。
+10. **花火(huahuo)平台专用规则**：
+   - 花火平台特有字段：upper_mid（B站UID）、mcn_id（花火账号ID）、huahuo_id（花火达人ID/mapping_id）
+   - get_huahuo_up_portrait: 获取UP主详细画像（需要 upper_mid + mcn_id 两个参数）
+   - get_huahuo_up_trend: 获取UP主最新作品趋势数据（只需 upper_mid）
+   - get_huahuo_up_growth: 获取UP主粉丝增长数据（只需 upper_mid）
+   - get_huahuo_up_highlights: 获取UP主稿件亮点统计（只需 upper_mid）
+   - 花火数据不是视频列表，而是UP主画像/统计数据，不需要设置 each_detail
+   - 花火常用字段：upper_mid, mapping_id, nickname, fans_num, fans_like_num, partition_name, second_partition_name, average_play_cnt, average_interactive_rate, upper_prices, mcn_company_name
+11. topic/start_date/end_date 必须从用户需求中提取。没有提到就留空字符串（""），严禁臆测。
 11. **export_fields 必须完整**：
    - 跨平台场景下，export_fields 可以包含多个平台的字段名（如同时有 bvid 和 aweme_id），
      后端会自动从每个平台的数据中提取对应字段，缺失的留空。

@@ -119,3 +119,101 @@ class GetKsShareDataArgs(BaseModel):
 class GetKsLiveArgs(BaseModel):
     """获取快手直播数据参数"""
     stream_id: str = Field(..., description="直播ID")
+
+
+# 花火工具参数模型
+class GetHuahuoListArgs(BaseModel):
+    """获取花火UP主列表参数"""
+    key: str | None = Field(default=None, description="搜索关键词")
+    page: int = Field(default=1, description="页码，默认1")
+    order_bys: int | None = Field(default=None, description="排序字段，0-综合 1-粉丝升序 2-粉丝降序 3-报价降序 4-报价升序")
+    content_tag_id: int | None = Field(default=None, description="内容分类ID")
+    commercial_tag_id: str | None = Field(default=None, description="商单类型ID，多个逗号分隔")
+    fans_ranges: str | None = Field(default=None, description="粉丝数量范围，多个逗号分隔")
+    min_fans_num: int | None = Field(default=None, description="粉丝数最小值")
+    max_fans_num: int | None = Field(default=None, description="粉丝数最大值")
+    task_price_ranges: str | None = Field(default=None, description="任务价格范围，多个逗号分隔")
+    min_task_price: int | None = Field(default=None, description="报价最小值")
+    max_task_price: int | None = Field(default=None, description="报价最大值")
+    cooperation_types: str | None = Field(default=None, description="合作类型，1-植入视频 2-定制视频 3-直发动态 4-转发动态 -1-非标准")
+    region_id: int | None = Field(default=None, description="UP主画像--主分区")
+    partition_id: int | None = Field(default=None, description="UP主画像--所在地域省份")
+    second_partition_id: int | None = Field(default=None, description="UP主画像--所在地域城市")
+    gender: str | None = Field(default=None, description="达人性别，0-男 1-女")
+
+
+class GetHuahuoUpPortraitArgs(BaseModel):
+    """获取UP主个人信息（画像）参数"""
+    upper_mid: int = Field(..., description="UP主ID（B站UID）")
+    mcn_id: int = Field(..., description="MCN机构ID（花火ID）")
+
+
+class GetHuahuoUpTrendArgs(BaseModel):
+    """获取UP主最新作品参数"""
+    upper_mid: int = Field(..., description="UP主ID")
+    trend_type: int = Field(default=3, description="数据类型，3-播放量 4-点赞 5-评论 6-弹幕")
+
+
+class GetHuahuoUpGrowthArgs(BaseModel):
+    """获取UP主成长表现参数"""
+    upper_mid: int = Field(..., description="UP主ID")
+    query_type: int = Field(default=1, description="查询类型，1-总量 2-增量")
+
+
+class GetHuahuoUpAttentionUserArgs(BaseModel):
+    """获取UP主粉丝重合参数"""
+    upper_mid: int = Field(..., description="UP主ID")
+    fans_range: int = Field(default=6, description="粉丝量范围，2-1~5W 3-5~10W 4-10~20W 5-20~30W 6-30~50W 7-50~100W 8-100~200W 9-200W以上")
+    page: int = Field(default=1, description="页码")
+
+
+class GetHuahuoUpRepresentativeArgs(BaseModel):
+    """获取UP主个人案例参数"""
+    upper_mid: int = Field(..., description="UP主ID")
+    type: int = Field(default=1, description="案例类型，1-个人案例 2-商业案例")
+
+
+class GetHuahuoUpSimilarContentArgs(BaseModel):
+    """获取UP主内容重合资参数"""
+    upper_mid: int = Field(..., description="UP主ID")
+
+
+class GetHuahuoUpHighlightsArgs(BaseModel):
+    """获取UP主稿件亮点参数"""
+    upper_mid: int = Field(..., description="UP主ID")
+    type: int = Field(default=1, description="时间范围，1-近30天 2-近90天 3-近180天")
+
+
+class GetHuahuoSignedUpListArgs(BaseModel):
+    """获取签约UP主列表参数"""
+    page: int = Field(default=1, description="页码，默认1")
+    size: int = Field(default=50, description="每页条数，默认50")
+
+
+class GetHuahuoTaskInfoArgs(BaseModel):
+    """获取任务基础内容参数"""
+    task_no: str = Field(..., description="任务编号")
+
+
+class GetHuahuoOrderInfoArgs(BaseModel):
+    """获取订单基础内容参数"""
+    order_no: str = Field(..., description="订单编号")
+
+
+class GetHuahuoFavUpListArgs(BaseModel):
+    """获取清单中的UP主数据参数"""
+    folder_id: int = Field(..., description="清单ID")
+    page: int = Field(default=1, description="页码，默认1")
+    size: int = Field(default=50, description="每页条数，默认50")
+
+
+class AddHuahuoFavArgs(BaseModel):
+    """添加UP主到清单参数"""
+    folder_id: int = Field(..., description="清单ID")
+    mapping_ids: str = Field(..., description="花火ID，多个逗号分隔")
+
+
+class CancelHuahuoFavArgs(BaseModel):
+    """从清单中移除UP主参数"""
+    folder_id: int = Field(..., description="清单ID")
+    mapping_id: int = Field(..., description="花火ID")

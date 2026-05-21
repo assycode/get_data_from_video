@@ -304,6 +304,9 @@ async def process_one_creator(
         # 快手字段
         "ks_uid": creator.get("ks_uid") or creator.get("uid"),
         "photo_id": creator.get("photo_id"),
+        # 花火字段
+        "mcn_id": creator.get("mcn_id") or creator.get("huahuo_account_id"),
+        "huahuo_id": creator.get("huahuo_id") or creator.get("mapping_id"),
     }
     logger.info(f"[Batch][{task_id}] {nickname} 初始 param_pool: user_id={param_pool.get('user_id')}, note_id={param_pool.get('note_id')}, aweme_id={param_pool.get('aweme_id')}, sec_uid={param_pool.get('sec_uid')}, uid={param_pool.get('uid')}")
 
@@ -430,7 +433,7 @@ async def process_one_creator(
         hashtags = [t.get("hashtag_name", "") for t in text_extra if isinstance(t, dict)]
         logger.debug(f"[Batch][{task_id}] {nickname} 视频{i}: aweme_id={v.get('aweme_id')}, desc={v.get('desc', '')[:50]}..., hashtags={hashtags}")
     
-    filtered = _apply_global_filter(video_list, workflow_plan.global_filter)
+    filtered = _apply_global_filter(video_list, workflow_plan.global_filter, param_pool)
     logger.info(f"[Batch][{task_id}] {nickname} 全局过滤后视频数: {len(filtered)}")
 
     # 组装导出

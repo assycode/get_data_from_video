@@ -302,6 +302,81 @@ TOOL_OUTPUT_EXTRACTORS: dict[str, Callable[[Any], dict[str, Any]]] = {
         "fan_count": _safe_get(data, "data", "fan_count"),
         "follow_count": _safe_get(data, "data", "follow_count"),
     },
+    # --- 花火工具 ---
+    "get_huahuo_list": lambda data: {
+        "video_list": _extract_vlist(data),  # UP主列表复用 video_list 字段名
+        "page_info": _extract_page_info(data),
+    },
+    "get_huahuo_up_portrait": lambda data: {
+        "mapping_id": _safe_get(data, "data", "mapping_id"),
+        "upper_mid": _safe_get(data, "data", "upper_mid"),
+        "mcn_id": _safe_get(data, "data", "mcn_id"),
+        "nickname": _safe_get(data, "data", "nickname"),
+        "fans_num": _safe_get(data, "data", "fans_num"),
+        "fans_like_num": _safe_get(data, "data", "fans_like_num"),
+        "partition_name": _safe_get(data, "data", "partition_name"),
+        "second_partition_name": _safe_get(data, "data", "second_partition_name"),
+        "average_play_cnt": _safe_get(data, "data", "average_play_cnt"),
+        "average_interactive_rate": _safe_get(data, "data", "average_interactive_rate"),
+        "upper_prices": _safe_get(data, "data", "upper_prices"),
+        "mcn_company_name": _safe_get(data, "data", "mcn_company_name"),
+    },
+    "get_huahuo_up_trend": lambda data: {
+        "upper_draft_trend_info_vos": _safe_get(data, "data", "upper_draft_trend_info_vos"),
+        "min_cnt": _safe_get(data, "data", "min_cnt"),
+        "max_cnt": _safe_get(data, "data", "max_cnt"),
+        "median": _safe_get(data, "data", "median"),
+    },
+    "get_huahuo_up_growth": lambda data: {
+        "fans_inc7": _safe_get(data, "data", "fans_inc7"),
+        "fans_inc30": _safe_get(data, "data", "fans_inc30"),
+        "fans_inc90": _safe_get(data, "data", "fans_inc90"),
+        "fans_inc180": _safe_get(data, "data", "fans_inc180"),
+        "fans_inc365": _safe_get(data, "data", "fans_inc365"),
+        "data_statistics_by_day_vos": _safe_get(data, "data", "data_statistics_by_day_vos"),
+    },
+    "get_huahuo_up_attention_user": lambda data: {
+        "video_list": _extract_vlist(data),  # 粉丝重合达人列表
+    },
+    "get_huahuo_up_representative": lambda data: {
+        "video_list": _extract_vlist(data),  # 案例视频列表
+    },
+    "get_huahuo_up_similar_content": lambda data: {
+        "video_list": _extract_vlist(data),  # 内容重合达人列表
+    },
+    "get_huahuo_up_highlights": lambda data: {
+        "avid_cnt": _safe_get(data, "data", "avid_cnt"),
+        "hot_cnt": _safe_get(data, "data", "hot_cnt"),
+        "explode_cnt": _safe_get(data, "data", "explode_cnt"),
+        "hot_rate": _safe_get(data, "data", "hot_rate"),
+        "explode_rate": _safe_get(data, "data", "explode_rate"),
+        "high_interact_rate": _safe_get(data, "data", "high_interact_rate"),
+    },
+    "get_huahuo_signed_up_list": lambda data: {
+        "video_list": _extract_vlist(data),  # 签约UP主列表
+        "page_info": _extract_page_info(data),
+    },
+    "get_huahuo_task_info": lambda data: {
+        "task_list": _extract_vlist(data),  # 任务列表
+        "page_info": _extract_page_info(data),
+    },
+    "get_huahuo_order_info": lambda data: {
+        "order_list": _extract_vlist(data),  # 订单列表
+        "page_info": _extract_page_info(data),
+    },
+    "get_huahuo_fav_lists": lambda data: {
+        "fav_lists": _extract_vlist(data),  # 清单列表
+    },
+    "get_huahuo_fav_up_list": lambda data: {
+        "video_list": _extract_vlist(data),  # 清单中的UP主列表
+        "page_info": _extract_page_info(data),
+    },
+    "add_huahuo_fav": lambda data: {
+        "result": data.get("data") if isinstance(data, dict) else None,
+    },
+    "cancel_huahuo_fav": lambda data: {
+        "result": data.get("data") if isinstance(data, dict) else None,
+    },
 }
 
 

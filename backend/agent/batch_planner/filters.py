@@ -17,6 +17,44 @@ logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------------------
+# 字段名映射：接口返回的驼峰/下划线 → 统一的 export_fields 格式
+# ------------------------------------------------------------------------------
+
+# 接口返回字段名 → export_fields 标准字段名
+FIELD_NAME_MAPPING: dict[str, str] = {
+    # 小红书驼峰 → 下划线
+    "noteId": "note_id",
+    "userId": "user_id",
+    "likeNum": "likeNum",  # 保持一致
+    "readNum": "readNum",
+    "collectNum": "collectNum",
+    "shareNum": "shareNum",
+    "cmtNum": "cmtNum",
+    "followCnt": "followCnt",
+    "isVideo": "isVideo",
+    "imgUrl": "imgUrl",
+    "thirdReadUserNum": "thirdReadUserNum",
+    "isAdvertise": "isAdvertise",
+    "brandName": "brandName",
+    "contentTags": "contentTags",
+    
+    # 快手驼峰兼容
+    "photoId": "photo_id",
+    "caption": "caption",
+    
+    # 抖音兼容
+    "awemeId": "aweme_id",
+}
+
+# export_fields 标准字段名 → 接口可能的返回字段名列表（按优先级排序）
+REVERSE_FIELD_MAPPING: dict[str, list[str]] = {
+    "note_id": ["note_id", "noteId"],
+    "user_id": ["user_id", "userId"],
+    "photo_id": ["photo_id", "photoId"],
+}
+
+
+# ------------------------------------------------------------------------------
 # 去重
 # ------------------------------------------------------------------------------
 
@@ -41,8 +79,19 @@ def _dedup_video_list(video_list: list[dict]) -> list[dict]:
 # ------------------------------------------------------------------------------
 
 
-def _apply_global_filter(video_list: list[dict], global_filter: GlobalFilter) -> list[dict]:
-    """按全局过滤条件筛选视频列表。"""
+def _apply_global_filter(video_list: list[dict], global_filter: GlobalFilter, param_pool: dict[str, Any] | None = None) -> list[dict]:
+    """按全局过滤条件筛选视频列表。
+    
+    修改：支持花火UP主画像数据直通（当没有视频列表但有花火数据时）
+    """
+    # ===== 新增：花火画像数据直通 =====
+    if param_pool and not video_list:
+        has_huahuo_data = "mapping_id" in param_pool or "upper_mid" in param_pool
+        if has_huahuo_data:
+            logger.info(f"检测到花火UP主画像数据，跳过滤波，直接导出")
+            return [{}]  # 返回占位列表，触发一次导出
+    # ===== 新增结束 =====
+    
     topic = global_filter.topic.lstrip("#").strip() if global_filter.topic else ""
     start_date = global_filter.start_date
     end_date = global_filter.end_date
@@ -125,12 +174,84 @@ def _build_export_record(
     3. param_pool 中的字段
     4. stat / statistics 对象中的统计字段
     5. get_video_detail 返回的 View / author / text_extra 对象中的字段
+    6. 花火UP主画像数据（新增）
     """
     record: dict[str, Any] = {}
     
     # 调试日志
     logger.info(f"[_build_export_record] export_fields={export_fields}")
     logger.info(f"[_build_export_record] item.keys={list(item.keys())}, param_pool.keys={list(param_pool.keys())}")
+    
+    # ===== 新增：花火UP主画像数据检测 =====
+    has_huahuo_id = "upper_mid" in param_pool or "mapping_id" in param_pool
+    has_video_id = "bvid" in item or "aweme_id" in item or "note_id" in item or "photo_id" in item
+    
+    if has_huahuo_id and not has_video_id:
+        # 这是花火UP主画像数据，直接从 param_pool 构建记录
+        logger.info(f"[_build_export_record] 检测到花火UP主画像数据，从 param_pool 构建记录")
+        record["platform"] = "huahuo"
+        
+        for field in export_fields:
+            if field == "platform":
+                continue
+            
+            # 支持嵌套字段（如 upper_prices.custom_price）
+            if "." in field:
+                parts = field.split(".")
+                value = param_pool
+                for part in parts:
+                    if isinstance(value, dict):
+                        value = value.get(part)
+                    else:
+                        value = None
+                        break
+                record[field] = value
+            else:
+                # 尝试所有可能的字段名（支持驼峰/下划线映射）
+                possible_names = REVERSE_FIELD_MAPPING.get(field, [field])
+                value = None
+                for name in possible_names:
+                    if name in item and item[name] is not None:
+                        value = item[name]
+                        break
+                    if name in param_pool and param_pool[name] is not None:
+                        value = param_pool[name]
+                        break
+                record[field] = value
+        
+        # 兜底：确保 creator_nickname 和 creator_mid 存在
+        if "creator_nickname" not in record:
+            record["creator_nickname"] = param_pool.get("nickname") or nickname
+        if "creator_mid" not in record:
+            record["creator_mid"] = param_pool.get("upper_mid") or param_pool.get("mapping_id")
+        
+        # ===== 新增：扁平化 upper_prices 对象 =====
+        # upper_prices 可能是对象或数组，提取其中的 custom_price 和 star_price
+        upper_prices = param_pool.get("upper_prices")
+        if isinstance(upper_prices, dict):
+            # 是对象，直接提取
+            if "custom_price" not in record or record["custom_price"] is None:
+                record["custom_price"] = upper_prices.get("custom_price")
+            if "star_price" not in record or record["star_price"] is None:
+                record["star_price"] = upper_prices.get("star_price")
+        elif isinstance(upper_prices, list) and upper_prices:
+            # 是数组，取第一个元素
+            first = upper_prices[0]
+            if isinstance(first, dict):
+                if "custom_price" not in record or record["custom_price"] is None:
+                    record["custom_price"] = first.get("custom_price")
+                if "star_price" not in record or record["star_price"] is None:
+                    record["star_price"] = first.get("star_price")
+        
+        # 格式化报价信息字段，方便直接显示
+        if record.get("custom_price") or record.get("star_price"):
+            custom = record.get("custom_price", "-")
+            star = record.get("star_price", "-")
+            record["upper_prices"] = f"{custom} / {star}"
+        # ===== 新增结束 =====
+        
+        return record if record else None
+    # ===== 新增结束 =====
 
     # get_video_list 返回的 vlist 字段名与标准字段名的映射
     _LIST_FIELD_ALIASES: dict[str, str] = {
@@ -157,7 +278,13 @@ def _build_export_record(
         return None
 
     def _get_field(field: str) -> Any:
-        # 1. item 中直接匹配
+        # 0. 尝试所有可能的字段名映射（接口返回可能是驼峰或下划线）
+        possible_names = REVERSE_FIELD_MAPPING.get(field, [field])
+        for name in possible_names:
+            if name in item and item[name] is not None:
+                return item[name]
+
+        # 1. item 中直接匹配（兜底）
         if field in item and item[field] is not None:
             return item[field]
 

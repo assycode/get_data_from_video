@@ -7,10 +7,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from api import bilibili, douyin, xiaohongshu, kuaishou
+from api import bilibili, douyin, xiaohongshu, kuaishou, huahuo
 
 # 平台列表：新增平台时在此追加导入
-PLATFORMS = [bilibili, douyin, xiaohongshu, kuaishou]
+PLATFORMS = [bilibili, douyin, xiaohongshu, kuaishou, huahuo]
 
 # 动态合并所有平台的 API_REGISTRY
 API_REGISTRY: dict[str, Any] = {}
@@ -146,6 +146,160 @@ TOOL_META: dict[str, dict[str, Any]] = {
         "return_fields": [
             "profile(用户资料: user_name/headurl/kwaiId/user_id)",
             "ownerCount(统计数据: fan/photo/follow)",
+        ],
+    },
+    # 花火工具（B站商业合作平台）
+    "get_huahuo_list": {
+        "description": "获取花火UP主列表（达人库），支持多种筛选条件",
+        "input_params": [
+            "key(搜索关键词,可选)", "page(页码,默认1)", "order_bys(排序:0综合1粉丝升2粉丝降3报价降4报价升)",
+            "content_tag_id(内容分类ID)", "commercial_tag_id(商单类型ID)",
+            "fans_ranges(粉丝范围)", "min_fans_num(最小粉丝数)", "max_fans_num(最大粉丝数)",
+            "cooperation_types(合作类型:1植入2定制3直发动态4转发动态-1非标准)",
+        ],
+        "return_fields": [
+            "data.data(UP主列表)", "upper_mid(UP主ID)", "nickname(昵称)", "fans_num(粉丝数)",
+            "partition_name(主分类)", "price_infos(报价信息)", "tags(标签)",
+        ],
+    },
+    "get_huahuo_up_portrait": {
+        "description": "获取UP主个人信息（画像），包含粉丝分布、内容数据、报价等详细信息",
+        "input_params": ["upper_mid(UP主ID/B站UID)", "mcn_id(MCN机构ID/花火ID)"],
+        "return_fields": [
+            "nickname(昵称)", "fans_num(粉丝数)", "upper_prices(报价)",
+            "sax_distributions(粉丝性别分布)", "age_distributions(粉丝年龄分布)",
+            "top_region_distributions(粉丝地区分布)", "first_categories_profile(粉丝一级分区)",
+            "average_play_cnt(平均播放量)", "average_interactive_rate(平均互动率)",
+        ],
+    },
+    "get_huahuo_up_trend": {
+        "description": "获取UP主最新作品趋势数据（播放量/点赞/评论/弹幕）",
+        "input_params": ["upper_mid(UP主ID)", "trend_type(数据类型:3播放4点赞5评论6弹幕)"],
+        "return_fields": [
+            "min_cnt(最小值)", "max_cnt(最大值)", "median(平均值)",
+            "upper_draft_trend_info_vos(视频数据列表: bv_id/title/pub_date/trend_cnt/play)",
+        ],
+    },
+    "get_huahuo_up_growth": {
+        "description": "获取UP主成长表现数据（粉丝增长趋势）",
+        "input_params": ["upper_mid(UP主ID)", "query_type(查询类型:1总量2增量)"],
+        "return_fields": [
+            "fans_inc7/30/90/180/365(7天/30天/90天/180天/365天粉丝增量)",
+            "data_statistics_by_day_vos(按天统计数据: date/count)",
+        ],
+    },
+    "get_huahuo_up_attention_user": {
+        "description": "获取UP主粉丝重合的达人列表",
+        "input_params": [
+            "upper_mid(UP主ID)",
+            "fans_range(粉丝量范围:2-1~5W 3-5~10W 4-10~20W 5-20~30W 6-30~50W 7-50~100W 8-100~200W 9-200W以上)",
+            "page(页码)",
+        ],
+        "return_fields": [
+            "upper_mid(UP主ID)", "mcn_id(花火ID)", "nickname(昵称)", "fans_num(粉丝数)",
+            "price_infos(报价信息)", "tags(标签)",
+        ],
+    },
+    "get_huahuo_up_representative": {
+        "description": "获取UP主个人案例/商业案例",
+        "input_params": ["upper_mid(UP主ID)", "type(案例类型:1个人2商业)"],
+        "return_fields": [
+            "av_id/bv_id(视频ID)", "title(标题)", "play_cnt(播放量)",
+            "like_cnt(点赞数)", "comment_cnt(评论数)", "pub_time(发布时间)",
+        ],
+    },
+    "get_huahuo_up_similar_content": {
+        "description": "获取UP主内容重合的达人列表",
+        "input_params": ["upper_mid(UP主ID)"],
+        "return_fields": [
+            "upper_mid(UP主ID)", "mcn_id(花火ID)", "nickname(昵称)",
+            "fans_num(粉丝数)", "tags(标签)", "price_infos(报价信息)",
+        ],
+    },
+    "get_huahuo_up_highlights": {
+        "description": "获取UP主稿件亮点数据（热门/爆款视频统计）",
+        "input_params": ["upper_mid(UP主ID)", "type(时间范围:1近30天2近90天3近180天)"],
+        "return_fields": [
+            "avid_cnt(投稿数)", "hot_cnt(热门稿件数)", "explode_cnt(爆款视频数)",
+            "hot_rate(热门率)", "explode_rate(爆款率)", "high_interact_rate(高互动率)",
+        ],
+    },
+    "get_huahuo_signed_up_list": {
+        "description": "获取签约UP主列表",
+        "input_params": ["page(页码)", "size(每页条数)"],
+        "return_fields": [
+            "result(UP主列表)", "up_mid(UP主ID)", "name(昵称)", "face(头像)",
+            "total_fans(总粉丝)", "fans(新增粉丝)", "archives(总投稿)", "plays(总播放)",
+        ],
+    },
+    "get_huahuo_task_info": {
+        "description": "获取任务基础内容",
+        "input_params": ["task_no(任务编号)"],
+        "return_fields": [
+            "task_id(任务ID)", "task_no(任务编号)", "task_title(任务标题)",
+            "brand_name(品牌名)", "total_money(金额)", "execution_start_time(执行开始)",
+        ],
+    },
+    "get_huahuo_order_info": {
+        "description": "获取订单基础内容",
+        "input_params": ["order_no(订单编号)"],
+        "return_fields": [
+            "order_id(订单ID)", "order_no(订单编号)", "nickname(UP主昵称)",
+            "price(订单金额)", "platform_price(平台价)", "status_desc(状态)",
+            "cooperation_type_desc(合作类型)",
+        ],
+    },
+    "get_huahuo_fav_lists": {
+        "description": "获取收藏清单列表",
+        "input_params": [],
+        "return_fields": [
+            "folder_id(清单ID)", "folder_name(清单名称)", "file_num(UP主数量)",
+        ],
+    },
+    "get_huahuo_fav_up_list": {
+        "description": "获取清单中的UP主数据",
+        "input_params": ["folder_id(清单ID)", "page(页码)", "size(每页条数)"],
+        "return_fields": [
+            "mapping_id(花火ID)", "upper_mid(B站UID)", "nickname(昵称)",
+            "fans_num(粉丝数)", "median_play_cnt(播放量中位数)", "price_infos(报价)",
+        ],
+    },
+    "add_huahuo_fav": {
+        "description": "添加UP主到清单",
+        "input_params": ["folder_id(清单ID)", "mapping_ids(花火ID,多个逗号分隔)"],
+        "return_fields": ["data(操作结果)"],
+    },
+    "cancel_huahuo_fav": {
+        "description": "从清单中移除UP主",
+        "input_params": ["folder_id(清单ID)", "mapping_id(花火ID)"],
+        "return_fields": ["data(操作结果)"],
+    },
+    "get_huahuo_partitions": {
+        "description": "获取UP主分区列表（B站内容分类）",
+        "input_params": [],
+        "return_fields": [
+            "分区树形结构: id/label/children",
+        ],
+    },
+    "get_huahuo_regions": {
+        "description": "获取地域列表（中国省份城市）",
+        "input_params": [],
+        "return_fields": [
+            "地域树形结构: id/label/children",
+        ],
+    },
+    "get_huahuo_content_tags": {
+        "description": "获取内容标签列表",
+        "input_params": [],
+        "return_fields": [
+            "标签树形结构: id/label/children",
+        ],
+    },
+    "get_huahuo_service_providers": {
+        "description": "获取服务商列表",
+        "input_params": [],
+        "return_fields": [
+            "service_provider_name(服务商名称)", "contacts(联系人)", "cooperated_brands(合作品牌)",
         ],
     },
 }

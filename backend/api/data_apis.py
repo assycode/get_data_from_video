@@ -42,6 +42,25 @@ from api.kuaishou import (
     get_ks_live,
 )
 
+# 从花火包导入所有函数
+from api.huahuo import (
+    get_huahuo_list,
+    get_huahuo_up_portrait,
+    get_huahuo_up_trend,
+    get_huahuo_up_growth,
+    get_huahuo_up_attention_user,
+    get_huahuo_up_representative,
+    get_huahuo_up_similar_content,
+    get_huahuo_up_highlights,
+    get_huahuo_signed_up_list,
+    get_huahuo_task_info,
+    get_huahuo_order_info,
+    get_huahuo_fav_lists,
+    get_huahuo_fav_up_list,
+    add_huahuo_fav,
+    cancel_huahuo_fav,
+)
+
 # 接口注册表（向后兼容，新代码建议使用 api.registry.API_REGISTRY）
 API_REGISTRY = {
     "get_up_info": get_up_info,
@@ -67,6 +86,22 @@ API_REGISTRY = {
     "get_ks_topic_list": get_ks_topic_list,
     "get_ks_share_data": get_ks_share_data,
     "get_ks_live": get_ks_live,
+    # 花火接口
+    "get_huahuo_list": get_huahuo_list,
+    "get_huahuo_up_portrait": get_huahuo_up_portrait,
+    "get_huahuo_up_trend": get_huahuo_up_trend,
+    "get_huahuo_up_growth": get_huahuo_up_growth,
+    "get_huahuo_up_attention_user": get_huahuo_up_attention_user,
+    "get_huahuo_up_representative": get_huahuo_up_representative,
+    "get_huahuo_up_similar_content": get_huahuo_up_similar_content,
+    "get_huahuo_up_highlights": get_huahuo_up_highlights,
+    "get_huahuo_signed_up_list": get_huahuo_signed_up_list,
+    "get_huahuo_task_info": get_huahuo_task_info,
+    "get_huahuo_order_info": get_huahuo_order_info,
+    "get_huahuo_fav_lists": get_huahuo_fav_lists,
+    "get_huahuo_fav_up_list": get_huahuo_fav_up_list,
+    "add_huahuo_fav": add_huahuo_fav,
+    "cancel_huahuo_fav": cancel_huahuo_fav,
 }
 
 # 同步辅助函数注册表（向后兼容）
